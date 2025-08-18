@@ -1,81 +1,111 @@
 """
-LangGraph checkpointing utilities for Postgres persistence.
+LangGraph checkpointing utilities for state persistence.
 
 This module provides utilities for:
 - Postgres-based checkpointing for LangGraph
+- In-memory checkpointing for development/testing
 - Conversation state persistence
 - Thread management across sessions
 """
 
 import logging
-from typing import Optional
-from ..config import MOCK_MODE
+from typing import Optional, Union
+from ..config import config
 
 logger = logging.getLogger(__name__)
 
-# Conditional imports for production mode
-if not MOCK_MODE:
-    try:
-        from langgraph.checkpoint.postgres import PostgresSaver, AsyncPostgresSaver
-    except ImportError as e:
-        logger.warning(f"Production dependencies not available: {e}")
-        PostgresSaver = None
-        AsyncPostgresSaver = None
-else:
+# Import checkpointer classes
+try:
+    from langgraph.checkpoint.postgres import PostgresSaver, AsyncPostgresSaver
+    from langgraph.checkpoint.memory import MemorySaver
+except ImportError as e:
+    logger.error(f"Failed to import LangGraph checkpointer dependencies: {e}")
     PostgresSaver = None
     AsyncPostgresSaver = None
+    MemorySaver = None
 
 
-def create_postgres_checkpointer(
-    connection_string: str,
-    async_mode: bool = False
+def create_checkpointer(
+    connection_string: Optional[str] = None,
+    async_mode: bool = False,
+    checkpointer_type: Optional[str] = None,
+) -> Optional[Union[PostgresSaver, MemorySaver]]:
+    """
+    Create a checkpointer based on configuration.
+
+    Args:
+        connection_string: PostgreSQL connection string (required for postgres checkpointer)
+        async_mode: Whether to use async postgres checkpointer
+        checkpointer_type: Override config checkpointer type ("postgres", "memory", or None for auto)
+
+    Returns:
+        Checkpointer instance or None if creation fails
+    """
+    effective_type = checkpointer_type or config.effective_checkpointer_type
+
+    if effective_type == "memory":
+        return _create_memory_checkpointer()
+    elif effective_type == "postgres":
+        if not connection_string:
+            connection_string = config.postgres_connection_string
+        if not connection_string:
+            logger.error(
+                "Postgres checkpointer requested but no connection string available"
+            )
+            logger.info("Falling back to memory checkpointer")
+            return _create_memory_checkpointer()
+        return _create_postgres_checkpointer(connection_string, async_mode)
+    else:
+        logger.error(f"Unknown checkpointer type: {effective_type}")
+        return None
+
+
+def _create_postgres_checkpointer(
+    connection_string: str, async_mode: bool = False
 ) -> Optional[PostgresSaver]:
     """Create a Postgres checkpointer for LangGraph state persistence."""
-    
-    if MOCK_MODE:
-        logger.info("Mock mode enabled - using in-memory checkpointing")
+    if not PostgresSaver or not AsyncPostgresSaver:
+        logger.error("Postgres checkpointer dependencies not available")
         return None
-    
+
     try:
         if async_mode:
             checkpointer = AsyncPostgresSaver.from_conn_string(connection_string)
         else:
             checkpointer = PostgresSaver.from_conn_string(connection_string)
-        
+
         # Setup database tables
         checkpointer.setup()
-        
-        logger.info(f"Created {'async' if async_mode else 'sync'} Postgres checkpointer")
+
+        logger.info(
+            f"Created {'async' if async_mode else 'sync'} Postgres checkpointer"
+        )
         return checkpointer
-        
+
     except Exception as e:
         logger.error(f"Error creating Postgres checkpointer: {e}")
-        if MOCK_MODE:
-            return None
         raise
 
 
-class MockCheckpointer:
-    """Mock checkpointer for development mode."""
-    
-    def __init__(self):
-        self.memory = {}
-    
-    def setup(self):
-        """Setup mock checkpointer - no-op."""
-        pass
-    
-    def get(self, config):
-        """Get checkpoint from memory."""
-        thread_id = config.get("configurable", {}).get("thread_id")
-        return self.memory.get(thread_id)
-    
-    def put(self, config, checkpoint):
-        """Store checkpoint in memory."""
-        thread_id = config.get("configurable", {}).get("thread_id")
-        if thread_id:
-            self.memory[thread_id] = checkpoint
-    
-    def list(self, config):
-        """List checkpoints - returns empty for mock."""
-        return []
+def _create_memory_checkpointer() -> Optional[MemorySaver]:
+    """Create an in-memory checkpointer for development/testing."""
+    if not MemorySaver:
+        logger.error("Memory checkpointer dependencies not available")
+        return None
+
+    try:
+        checkpointer = MemorySaver()
+        logger.info("Created in-memory checkpointer")
+        return checkpointer
+
+    except Exception as e:
+        logger.error(f"Error creating memory checkpointer: {e}")
+        raise
+
+
+# Backwards compatibility alias
+def create_postgres_checkpointer(
+    connection_string: str, async_mode: bool = False
+) -> Optional[PostgresSaver]:
+    """Create a Postgres checkpointer for LangGraph state persistence."""
+    return _create_postgres_checkpointer(connection_string, async_mode)

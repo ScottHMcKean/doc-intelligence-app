@@ -3,8 +3,7 @@
 import logging
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
-
-from ..config import config
+from databricks.sdk import WorkspaceClient
 
 logger = logging.getLogger(__name__)
 
@@ -22,44 +21,71 @@ except ImportError as e:
 
 class EmbeddingService:
     """Service for embeddings and vector operations."""
-    
-    def __init__(self, databricks_host: Optional[str] = None, databricks_token: Optional[str] = None):
-        self.databricks_host = databricks_host or config.databricks_host
-        self.databricks_token = databricks_token or config.databricks_token
-        self.embedding_endpoint = config.databricks_embedding_endpoint
-        
+
+    def __init__(
+        self,
+        client: Optional[WorkspaceClient],
+        config: dict,
+        embedding_endpoint: Optional[str] = None,
+    ):
+        self.client = client
+        self.config = config
+        self.embedding_endpoint = embedding_endpoint
+
+        # Get configuration values
+        self.chunk_size = config.get("chunk_size", 1000)
+        self.chunk_overlap = config.get("chunk_overlap", 200)
+        self.batch_size = config.get("batch_size", 10)
+        self.vector_store_collection_name = config.get("vector_store", {}).get(
+            "collection_name", "document_chunks"
+        )
+        self.vector_store_embedding_dimension = config.get("vector_store", {}).get(
+            "embedding_dimension", 768
+        )
+
+        # Get Databricks credentials from client
+        self.databricks_host = None
+        self.databricks_token = None
+        if self.client:
+            try:
+                # Extract host and token from the client config if available
+                self.databricks_host = getattr(self.client.config, "host", None)
+                self.databricks_token = getattr(self.client.config, "token", None)
+            except:
+                pass
+
         self.embeddings = None
         self.text_splitter = None
         self.vectorstore = None
-        
+
         self._initialize()
-    
+
     def _initialize(self):
         """Initialize embedding components."""
         self._init_text_splitter()
         self._init_embeddings()
-    
+
     def _init_text_splitter(self):
         """Initialize text splitter for chunking."""
         try:
             self.text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=512,
-                chunk_overlap=50,
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
                 length_function=len,
-                separators=["\n\n", "\n", " ", ""]
+                separators=["\n\n", "\n", " ", ""],
             )
             logger.info("Successfully initialized text splitter")
         except Exception as e:
             logger.error(f"Failed to initialize text splitter: {e}")
             self.text_splitter = None
-    
+
     def _init_embeddings(self):
         """Initialize Databricks embeddings."""
-        if not config.databricks_available or not self.embedding_endpoint:
+        if not self.client or not self.embedding_endpoint:
             logger.warning("Databricks embeddings not available")
             self.embeddings = None
             return
-            
+
         try:
             self.embeddings = DatabricksEmbeddings(
                 endpoint=self.embedding_endpoint,
@@ -70,18 +96,18 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed to initialize Databricks embeddings: {e}")
             self.embeddings = None
-    
+
     def init_vectorstore(self, connection_string: str) -> bool:
         """Initialize PGVector store for document chunks."""
-        if not config.postgres_available or not self.embeddings:
+        if not connection_string or not self.embeddings:
             logger.warning("Vector store not available")
             return False
-            
+
         try:
             self.vectorstore = PGVector(
                 connection_string=connection_string,
                 embedding_function=self.embeddings,
-                collection_name="document_chunks",
+                collection_name=self.vector_store_collection_name,
                 pre_delete_collection=False,
             )
             logger.info("Successfully initialized PGVector store")
@@ -90,21 +116,21 @@ class EmbeddingService:
             logger.error(f"Failed to initialize vector store: {e}")
             self.vectorstore = None
             return False
-    
+
     @property
     def is_available(self) -> bool:
         """Check if embedding service is available."""
         return self.embeddings is not None
-    
+
     @property
     def vectorstore_available(self) -> bool:
         """Check if vector store is available."""
         return self.vectorstore is not None
-    
+
     def chunk_text(self, text: str) -> Tuple[bool, List[str], str]:
         """
         Chunk text into smaller pieces.
-        
+
         Returns:
             Tuple of (success, chunks, message)
         """
@@ -113,11 +139,15 @@ class EmbeddingService:
             chunks = []
             chunk_size = 512
             for i in range(0, len(text), chunk_size):
-                chunk = text[i:i + chunk_size]
+                chunk = text[i : i + chunk_size]
                 if chunk.strip():
                     chunks.append(chunk)
-            return True, chunks, f"Text chunked into {len(chunks)} pieces (fallback method)"
-        
+            return (
+                True,
+                chunks,
+                f"Text chunked into {len(chunks)} pieces (fallback method)",
+            )
+
         try:
             chunks = self.text_splitter.split_text(text)
             logger.info(f"Successfully chunked text into {len(chunks)} pieces")
@@ -125,11 +155,13 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed to chunk text: {e}")
             return False, [], f"Failed to chunk text: {str(e)}"
-    
-    def generate_embeddings(self, texts: List[str]) -> Tuple[bool, Optional[List[List[float]]], str]:
+
+    def generate_embeddings(
+        self, texts: List[str]
+    ) -> Tuple[bool, Optional[List[List[float]]], str]:
         """
         Generate embeddings for a list of texts.
-        
+
         Returns:
             Tuple of (success, embeddings, message)
         """
@@ -141,8 +173,12 @@ class EmbeddingService:
                 # Generate random 768-dimensional vector
                 embedding = np.random.normal(0, 1, 768).tolist()
                 mock_embeddings.append(embedding)
-            return True, mock_embeddings, f"Generated {len(mock_embeddings)} mock embeddings"
-        
+            return (
+                True,
+                mock_embeddings,
+                f"Generated {len(mock_embeddings)} mock embeddings",
+            )
+
         try:
             embeddings = self.embeddings.embed_documents(texts)
             logger.info(f"Successfully generated {len(embeddings)} embeddings")
@@ -150,11 +186,13 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed to generate embeddings: {e}")
             return False, None, f"Failed to generate embeddings: {str(e)}"
-    
-    def generate_single_embedding(self, text: str) -> Tuple[bool, Optional[List[float]], str]:
+
+    def generate_single_embedding(
+        self, text: str
+    ) -> Tuple[bool, Optional[List[float]], str]:
         """
         Generate embedding for a single text.
-        
+
         Returns:
             Tuple of (success, embedding, message)
         """
@@ -162,7 +200,7 @@ class EmbeddingService:
             # Generate mock embedding
             embedding = np.random.normal(0, 1, 768).tolist()
             return True, embedding, "Generated mock embedding"
-        
+
         try:
             embedding = self.embeddings.embed_query(text)
             logger.info("Successfully generated single embedding")
@@ -170,16 +208,13 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed to generate single embedding: {e}")
             return False, None, f"Failed to generate embedding: {str(e)}"
-    
+
     def similarity_search(
-        self, 
-        query: str, 
-        limit: int = 5,
-        filter_dict: Optional[Dict[str, Any]] = None
+        self, query: str, limit: int = 5, filter_dict: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, List[Dict[str, Any]], str]:
         """
         Perform similarity search in vector store.
-        
+
         Returns:
             Tuple of (success, results, message)
         """
@@ -189,75 +224,81 @@ class EmbeddingService:
             mock_results = [
                 {
                     "content": f"Mock search result {i+1} for query: {query}",
-                    "metadata": {"score": 0.9 - (i * 0.1), "document_id": f"mock_doc_{i+1}"},
-                    "score": 0.9 - (i * 0.1)
+                    "metadata": {
+                        "score": 0.9 - (i * 0.1),
+                        "document_id": f"mock_doc_{i+1}",
+                    },
+                    "score": 0.9 - (i * 0.1),
                 }
                 for i in range(min(limit, 3))
             ]
-            return True, mock_results, f"Generated {len(mock_results)} mock search results"
-        
+            return (
+                True,
+                mock_results,
+                f"Generated {len(mock_results)} mock search results",
+            )
+
         try:
             # Perform similarity search
             docs = self.vectorstore.similarity_search_with_score(
-                query=query,
-                k=limit,
-                filter=filter_dict
+                query=query, k=limit, filter=filter_dict
             )
-            
+
             results = []
             for doc, score in docs:
-                results.append({
-                    "content": doc.page_content,
-                    "metadata": doc.metadata,
-                    "score": score
-                })
-            
+                results.append(
+                    {
+                        "content": doc.page_content,
+                        "metadata": doc.metadata,
+                        "score": score,
+                    }
+                )
+
             logger.info(f"Found {len(results)} similar documents")
             return True, results, f"Found {len(results)} similar documents"
-            
+
         except Exception as e:
             logger.error(f"Failed to perform similarity search: {e}")
             return False, [], f"Search failed: {str(e)}"
-    
+
     def add_documents_to_vectorstore(
-        self, 
-        texts: List[str], 
-        metadatas: List[Dict[str, Any]]
+        self, texts: List[str], metadatas: List[Dict[str, Any]]
     ) -> Tuple[bool, str]:
         """
         Add documents to vector store.
-        
+
         Returns:
             Tuple of (success, message)
         """
         if not self.vectorstore:
             logger.warning("Vector store not available for document addition")
             return False, "Vector store not available"
-        
+
         try:
-            self.vectorstore.add_texts(
-                texts=texts,
-                metadatas=metadatas
-            )
+            self.vectorstore.add_texts(texts=texts, metadatas=metadatas)
             logger.info(f"Successfully added {len(texts)} documents to vector store")
             return True, f"Added {len(texts)} documents to vector store"
         except Exception as e:
             logger.error(f"Failed to add documents to vector store: {e}")
             return False, f"Failed to add documents: {str(e)}"
-    
-    def delete_documents_from_vectorstore(self, filter_dict: Dict[str, Any]) -> Tuple[bool, str]:
+
+    def delete_documents_from_vectorstore(
+        self, filter_dict: Dict[str, Any]
+    ) -> Tuple[bool, str]:
         """
         Delete documents from vector store.
-        
+
         Returns:
             Tuple of (success, message)
         """
         if not self.vectorstore:
             return False, "Vector store not available"
-        
+
         try:
             self.vectorstore.delete(filter=filter_dict)
-            logger.info(f"Successfully deleted documents matching filter: {filter_dict}")
+            logger.info(
+                f"Successfully deleted documents matching filter: {filter_dict}"
+            )
             return True, f"Deleted documents matching filter"
         except Exception as e:
             logger.error(f"Failed to delete documents from vector store: {e}")

@@ -1,0 +1,83 @@
+# Document Intelligence Application Configuration
+# This file contains ALL configuration settings
+# Sensitive values (passwords, tokens) should be stored in Databricks secrets
+
+# Application Configuration
+application:
+  name: "Document Intelligence"
+  debug_mode: false
+  log_level: "INFO"
+  secrets_scope: "doc-intelligence"
+
+agent:
+  # Endpoints - will be read from secrets if null
+  llm_endpoint: null
+  embedding_endpoint: null
+
+  # Job configuration for DocumentService
+  job_id: null # Optional: existing job ID to use
+  default_cluster_key: "default_cluster"
+  processing_notebook_path: "/Workspace/notebooks/document_processing"
+
+  # LLM Configuration
+  llm:
+    max_tokens: 512
+    temperature: 0.1
+
+  # RAG Configuration
+  rag:
+    chunk_size: 1000
+    chunk_overlap: 200
+    similarity_threshold: 0.7
+    max_results: 5
+
+  # Conversation Configuration
+  conversation:
+    max_history_messages: 10
+    title_generation_enabled: true
+    auto_title: true
+    persistent_state: true
+
+  # Checkpointer Configuration
+  checkpointer:
+    type: "auto" # Options: "postgres", "memory", "auto"
+
+# DatabaseService Configuration
+database:
+  host: "localhost"
+  port: 5432
+  database: "doc_intelligence"
+  # user and password will be read from secrets
+
+  # Database pool configuration
+  pool_size: 5
+  max_overflow: 10
+  pool_timeout: 30
+
+  # Connection options
+  sslmode: "prefer" # Options: disable, allow, prefer, require
+  connect_timeout: 10
+
+# StorageService Configuration
+storage:
+  volume_path: "/Volumes/main/default/documents"
+  max_file_size_mb: 100
+  allowed_extensions: [".pdf", ".txt", ".docx", ".md"]
+
+# DocumentService Configuration
+document:
+  timeout_minutes: 30
+  max_retries: 3
+  auto_process: true
+  generate_summary: true
+
+# EmbeddingService Configuration
+embedding:
+  chunk_size: 1000
+  chunk_overlap: 200
+  batch_size: 10
+
+  # Vector Store Configuration
+  vector_store:
+    collection_name: "document_chunks"
+    embedding_dimension: 768

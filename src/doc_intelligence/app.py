@@ -4,13 +4,13 @@ import logging
 from typing import Optional, Dict, Any, List
 
 from .services import (
-    AuthService,
     StorageService,
-    ProcessingService,
+    DocumentService,
     DatabaseService,
     EmbeddingService,
-    ChatService,
+    AgentService,
 )
+from .utils import create_workspace_client, get_current_user
 from .workflows import DocumentWorkflow, ConversationWorkflow
 from .config import config
 
@@ -32,16 +32,35 @@ class DocumentIntelligenceApp:
         """Initialize the application with all services and workflows."""
         logger.info("Initializing Document Intelligence Application")
 
-        # Initialize core services
-        self.auth_service = AuthService()
-        self.database_service = DatabaseService()
-        self.embedding_service = EmbeddingService()
-        self.chat_service = ChatService()
+        # Create Databricks workspace client
+        self.databricks_client = create_workspace_client(
+            host=config.databricks_host, token=config.databricks_token
+        )
 
-        # Initialize services that depend on auth
-        databricks_client = self.auth_service.get_client()
-        self.storage_service = StorageService(client=databricks_client)
-        self.processing_service = ProcessingService(client=databricks_client)
+        # Initialize core services with consistent API
+        self.database_service = DatabaseService(
+            client=self.databricks_client, config=config.config.get("database", {})
+        )
+
+        self.storage_service = StorageService(
+            client=self.databricks_client, config=config.config.get("storage", {})
+        )
+
+        self.document_service = DocumentService(
+            client=self.databricks_client, config=config.config.get("document", {})
+        )
+
+        # EmbeddingService needs the embedding endpoint from agent config
+        agent_config = config.config.get("agent", {})
+        self.embedding_service = EmbeddingService(
+            client=self.databricks_client,
+            config=config.config.get("embedding", {}),
+            embedding_endpoint=agent_config.get("embedding_endpoint"),
+        )
+
+        self.agent_service = AgentService(
+            client=self.databricks_client, config=agent_config
+        )
 
         # Initialize vector store if available
         if self.database_service.is_available:
@@ -51,18 +70,18 @@ class DocumentIntelligenceApp:
 
         # Initialize workflows
         self.document_workflow = DocumentWorkflow(
-            auth_service=self.auth_service,
+            client=self.databricks_client,
             storage_service=self.storage_service,
-            processing_service=self.processing_service,
+            document_service=self.document_service,
             database_service=self.database_service,
             embedding_service=self.embedding_service,
         )
 
         self.conversation_workflow = ConversationWorkflow(
-            auth_service=self.auth_service,
+            client=self.databricks_client,
             database_service=self.database_service,
             embedding_service=self.embedding_service,
-            chat_service=self.chat_service,
+            agent_service=self.agent_service,
         )
 
         logger.info("Document Intelligence Application initialized successfully")
@@ -87,12 +106,12 @@ class DocumentIntelligenceApp:
                         else "Databricks embedding endpoint not configured"
                     ),
                 },
-                "chat": {
-                    "available": self.chat_service.is_available,
+                "agent": {
+                    "available": self.agent_service.is_available,
                     "message": (
-                        "Databricks LLM endpoint configured"
-                        if self.chat_service.is_available
-                        else "Databricks LLM endpoint not configured"
+                        "Databricks LLM and agent capabilities configured"
+                        if self.agent_service.is_available
+                        else "Databricks LLM and agent capabilities not configured"
                     ),
                 },
                 "storage": {
@@ -117,7 +136,7 @@ class DocumentIntelligenceApp:
                 [
                     auth_valid
                     or not config.databricks_available,  # OK if not configured
-                    db_valid or not config.postgres_available,  # OK if not configured
+                    db_valid or not config.database_available,  # OK if not configured
                     True,  # Other services degrade gracefully
                 ]
             ),
@@ -276,7 +295,7 @@ class DocumentIntelligenceApp:
 
         # Check critical services
         if not status["services"]["database"]["available"]:
-            if config.postgres_available:
+            if config.database_available:
                 issues.append(
                     "PostgreSQL connection failed despite credentials being configured"
                 )

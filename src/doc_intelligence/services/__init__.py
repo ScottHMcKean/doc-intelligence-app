@@ -1,17 +1,15 @@
 """Core services for document intelligence application."""
 
-from .auth_service import AuthService
 from .storage_service import StorageService
-from .processing_service import ProcessingService
+from .document_service import DocumentService
 from .database_service import DatabaseService
 from .embedding_service import EmbeddingService
-from .chat_service import ChatService
+from .agent_service import AgentService
 
 __all__ = [
-    "AuthService",
-    "StorageService", 
-    "ProcessingService",
+    "StorageService",
+    "DocumentService",
     "DatabaseService",
     "EmbeddingService",
-    "ChatService",
+    "AgentService",
 ]

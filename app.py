@@ -58,9 +58,10 @@ st.markdown(
     }
     
     /* Databricks logo styling */
-    .databricks-logo {
+    .sidebar-title svg {
         width: 160px;
         max-height: 96px;
+        max-width: 100%;
         object-fit: contain;
     }
     
@@ -142,19 +143,16 @@ def render_sidebar(app: DocumentIntelligenceApp):
 
     with st.sidebar:
         # Databricks logo and title
-        st.markdown(
-            """
-        <div class="sidebar-title">
-            <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQwIiBoZWlnaHQ9IjgwIiB2aWV3Qm94PSIwIDAgMjQwIDgwIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgo8cGF0aCBkPSJNMTIwIDQwQzEyMCA2Mi4wOTEzIDEwMi4wOTEgODAgODAgODBDNTcuOTA4NyA4MCA0MCA2Mi4wOTEzIDQwIDQwQzQwIDE3LjkwODcgNTcuOTA4NyAwIDgwIDBDMTAyLjA5MSAwIDEyMCAxNy45MDg3IDEyMCA0MFoiIGZpbGw9IiNGRjZCMzUiLz4KPHBhdGggZD0iTTIwMCA0MEMyMDAgNjIuMDkxMyAxODIuMDkxIDgwIDE2MCA4MEMxMzcuOTA5IDgwIDEyMCA2Mi4wOTEzIDEyMCA0MEMxMjAgMTcuOTA4NyAxMzcuOTA5IDAgMTYwIDBDMTgyLjA5MSAwIDIwMCAxNy45MDg3IDIwMCA0MFoiIGZpbGw9IiMwMEE5RkYiLz4KPHRleHQgeD0iODAiIHk9IjUwIiBmb250LWZhbWlseT0iRE0gU2Fucywgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0id2hpdGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPkQ8L3RleHQ+Cjx0ZXh0IHg9IjE2MCIgeT0iNTAiIGZvbnQtZmFtaWx5PSJETSBTYW5zLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE0IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSJ3aGl0ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+QjwvdGV4dD4KPC9zdmc+" class="databricks-logo" />
-            <h2 style="margin: 0; color: var(--databricks-dark);">Document Intelligence Chat</h2>
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
+        logo_path = "fixtures/stacked-lockup-full-color-rgb.svg"
+        with open(logo_path, "r") as f:
+            logo_svg = f.read()
+
+        st.image(logo_path, use_container_width=True)
+        st.title("Document Intelligence")
 
         # Welcome message
         current_user = app.get_current_user()
-        st.markdown(f"<p>Welcome, {current_user}</p>", unsafe_allow_html=True)
+        st.text(f"Welcome, {current_user}")
 
         # System status
         with st.expander("System Status", expanded=False):

@@ -8,17 +8,21 @@ from pathlib import Path
 from typing import Optional, Tuple
 from databricks.sdk import WorkspaceClient
 
-from ..config import config
-
 logger = logging.getLogger(__name__)
 
 
 class StorageService:
     """Service for document storage operations with Databricks volumes."""
-    
-    def __init__(self, client: Optional[WorkspaceClient] = None):
+
+    def __init__(self, client: Optional[WorkspaceClient], config: dict):
         self.client = client
-        
+        self.config = config
+        self.volume_path = config.get("volume_path", "/Volumes/main/default/documents")
+        self.max_file_size_mb = config.get("max_file_size_mb", 100)
+        self.allowed_extensions = config.get(
+            "allowed_extensions", [".pdf", ".txt", ".docx", ".md"]
+        )
+
     @staticmethod
     def generate_document_hash(file_content: bytes, username: str) -> str:
         """Generate a unique hash for the document based on content and user."""
@@ -26,48 +30,62 @@ class StorageService:
         user_hash = hashlib.md5(username.encode()).hexdigest()[:8]
         timestamp = str(int(time.time()))
         return f"{user_hash}_{content_hash[:16]}_{timestamp}"
-    
+
     def upload_document(
-        self, 
-        file_content: bytes, 
-        filename: str, 
+        self,
+        file_content: bytes,
+        filename: str,
         username: str,
-        volume_path: Optional[str] = None
+        volume_path: Optional[str] = None,
     ) -> Tuple[bool, str, str, str]:
         """
         Upload document to Databricks volume.
-        
+
         Returns:
             Tuple of (success, doc_hash, upload_path, message)
         """
         # Use configured volume path or default
-        volume_path = volume_path or config.databricks_volume_path or "/Volumes/main/default/documents"
-        
+        volume_path = (
+            volume_path
+            or config.databricks_volume_path
+            or "/Volumes/main/default/documents"
+        )
+
         # Generate document hash and path
         doc_hash = self.generate_document_hash(file_content, username)
         file_extension = Path(filename).suffix
         unique_filename = f"{doc_hash}{file_extension}"
         upload_path = f"{volume_path}/{unique_filename}"
-        
+
         # Check if client is available
         if not self.client:
             logger.warning("No Databricks client available for upload")
-            return False, doc_hash, upload_path, "Databricks not connected. Document saved locally for processing."
-        
+            return (
+                False,
+                doc_hash,
+                upload_path,
+                "Databricks not connected. Document saved locally for processing.",
+            )
+
         try:
             # Upload to volume using the Files API
             self.client.files.upload(upload_path, file_content)
             logger.info(f"Successfully uploaded {filename} to {upload_path}")
-            return True, doc_hash, upload_path, f"Document uploaded successfully: {unique_filename}"
-            
+            return (
+                True,
+                doc_hash,
+                upload_path,
+                f"Document uploaded successfully: {unique_filename}",
+            )
+
         except Exception as e:
             logger.error(f"Failed to upload document {filename}: {str(e)}")
             return False, doc_hash, upload_path, f"Upload failed: {str(e)}"
-    
+
     def download_file(self, file_path: str) -> Tuple[bool, Optional[bytes], str]:
         """
         Download file from Databricks volume.
-        
+
         Returns:
             Tuple of (success, content, message)
         """
@@ -77,47 +95,55 @@ class StorageService:
             sample_content = {
                 "status": "success",
                 "parsed_content": {
-                    "pages": [{
-                        "text_blocks": [{
-                            "text": "Sample processed content. Connect Databricks for real AI parsing.",
-                            "confidence": 0.95,
-                            "type": "paragraph"
-                        }]
-                    }]
-                }
+                    "pages": [
+                        {
+                            "text_blocks": [
+                                {
+                                    "text": "Sample processed content. Connect Databricks for real AI parsing.",
+                                    "confidence": 0.95,
+                                    "type": "paragraph",
+                                }
+                            ]
+                        }
+                    ]
+                },
             }
-            return True, json.dumps(sample_content, indent=2).encode("utf-8"), "Returned sample content (Databricks not connected)"
-        
+            return (
+                True,
+                json.dumps(sample_content, indent=2).encode("utf-8"),
+                "Returned sample content (Databricks not connected)",
+            )
+
         try:
             result = self.client.files.download(file_path)
             logger.info(f"Successfully downloaded file from: {file_path}")
             return True, result.contents, "File downloaded successfully"
-            
+
         except Exception as e:
             logger.error(f"Failed to download file {file_path}: {str(e)}")
             return False, None, f"Download failed: {str(e)}"
-    
+
     def file_exists(self, file_path: str) -> bool:
         """Check if file exists in Databricks volume."""
         if not self.client:
             return False
-            
+
         try:
             self.client.files.download(file_path)
             return True
         except Exception:
             return False
-    
+
     def list_files(self, directory_path: str) -> Tuple[bool, list[str], str]:
         """
         List files in a directory.
-        
+
         Returns:
             Tuple of (success, file_list, message)
         """
         if not self.client:
             return False, [], "Databricks client not available"
-            
+
         try:
             # Note: This is a simplified implementation
             # In practice, you'd use the appropriate Databricks SDK method
