@@ -1,7 +1,7 @@
 [project]
 name = "doc-intelligence-app"
-version = "0.1.0"
-description = "Streamlit application for document intelligence with Databricks integration"
+version = "0.2.0"
+description = "Multi Tenant Document intelligence with Databricks"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -23,7 +23,6 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "pandas>=2.0.0",
     "aiofiles",
-    "python-dotenv>=1.0.0",
     "pyyaml>=6.0.0",
 ]
 

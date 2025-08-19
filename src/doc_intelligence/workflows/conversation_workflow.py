@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 
 from databricks.sdk import WorkspaceClient
-from ..services import DatabaseService, EmbeddingService, AgentService
+from ..services import DatabaseService, AgentService
 from ..utils import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -19,12 +19,10 @@ class ConversationWorkflow:
         self,
         client: Optional[WorkspaceClient],
         database_service: DatabaseService,
-        embedding_service: EmbeddingService,
         agent_service: AgentService,
     ):
         self.client = client
         self.database_service = database_service
-        self.embedding_service = embedding_service
         self.agent_service = agent_service
 
     def start_new_conversation(
@@ -48,7 +46,7 @@ class ConversationWorkflow:
 
         # Get username if not provided
         if not username:
-            username = self.auth_service.get_current_user()
+            username = get_current_user(self.client)
 
         # Create user record
         user = self.database_service.create_user(username)
@@ -124,7 +122,7 @@ class ConversationWorkflow:
 
         # Get username if not provided
         if not username:
-            username = self.auth_service.get_current_user()
+            username = get_current_user(self.client)
 
         try:
             # Add user message to database
@@ -152,7 +150,7 @@ class ConversationWorkflow:
             if not conversation:
                 return {"success": False, "error": "Conversation not found"}
 
-            # Retrieve relevant document context
+            # Retrieve relevant document context using agent service
             context_documents = self._retrieve_document_context(
                 user_message, conversation.document_ids or []
             )
@@ -233,7 +231,7 @@ class ConversationWorkflow:
     ) -> List[Dict[str, Any]]:
         """Get all conversations for a user."""
         if not username:
-            username = self.auth_service.get_current_user()
+            username = get_current_user(self.client)
 
         try:
             user = self.database_service.create_user(username)
@@ -297,17 +295,17 @@ class ConversationWorkflow:
     def _retrieve_document_context(
         self, query: str, document_hashes: List[str], limit: int = 5
     ) -> List[Dict[str, Any]]:
-        """Retrieve relevant document context for the query."""
-        if not document_hashes or not self.embedding_service.vectorstore_available:
+        """Retrieve relevant document context for the query using agent service."""
+        if not document_hashes or not self.agent_service.rag_available:
             return []
 
         try:
-            # Perform similarity search with document filter
+            # Use agent service for similarity search
             search_success, results, search_message = (
-                self.embedding_service.similarity_search(
+                self.agent_service.similarity_search(
                     query=query,
                     limit=limit,
-                    filter_dict={"document_id": {"$in": document_hashes}},
+                    document_ids=document_hashes,
                 )
             )
 

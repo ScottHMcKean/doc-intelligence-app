@@ -46,9 +46,7 @@ class StorageService:
         """
         # Use configured volume path or default
         volume_path = (
-            volume_path
-            or config.databricks_volume_path
-            or "/Volumes/main/default/documents"
+            volume_path or self.volume_path or "/Volumes/main/default/documents"
         )
 
         # Generate document hash and path
@@ -117,7 +115,9 @@ class StorageService:
         try:
             result = self.client.files.download(file_path)
             logger.info(f"Successfully downloaded file from: {file_path}")
-            return True, result.contents, "File downloaded successfully"
+            # Extract bytes from the streaming response
+            content_bytes = result.contents.read()
+            return True, content_bytes, "File downloaded successfully"
 
         except Exception as e:
             logger.error(f"Failed to download file {file_path}: {str(e)}")
@@ -129,7 +129,8 @@ class StorageService:
             return False
 
         try:
-            self.client.files.download(file_path)
+            result = self.client.files.download(file_path)
+            # Just check if we can download - don't need to read the content
             return True
         except Exception:
             return False

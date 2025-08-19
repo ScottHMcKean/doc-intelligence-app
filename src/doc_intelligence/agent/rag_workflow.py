@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional, TypedDict
 import hashlib
 from pathlib import Path
 
-from ..config import config
+# Config will be passed as parameter to functions that need it
 from ..database.schema import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,11 @@ class RAGWorkflow:
 
     def _init_embeddings(self):
         """Initialize Databricks embeddings."""
-        if not config.databricks_available or not self.embedding_endpoint:
+        if (
+            not self.databricks_host
+            or not self.databricks_token
+            or not self.embedding_endpoint
+        ):
             logger.warning("Databricks embeddings not available")
             self.embeddings = None
         else:
@@ -87,7 +91,7 @@ class RAGWorkflow:
 
     def _init_vectorstore(self):
         """Initialize PGVector store."""
-        if not self.embeddings or not config.postgres_available:
+        if not self.embeddings or not self.postgres_connection:
             logger.warning(
                 "Vector store not available - missing embeddings or database"
             )

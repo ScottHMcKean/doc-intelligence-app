@@ -10,7 +10,8 @@ This module provides utilities for:
 
 import logging
 from typing import Optional, Union
-from ..config import config
+
+# Config will be passed as parameter to functions that need it
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ def create_checkpointer(
     connection_string: Optional[str] = None,
     async_mode: bool = False,
     checkpointer_type: Optional[str] = None,
+    config=None,
 ) -> Optional[Union[PostgresSaver, MemorySaver]]:
     """
     Create a checkpointer based on configuration.
@@ -41,13 +43,19 @@ def create_checkpointer(
     Returns:
         Checkpointer instance or None if creation fails
     """
+    if config is None:
+        # Backwards compatibility - import global config if none provided
+        from ..config import DocConfig
+
+        config = DocConfig("./config.yaml")
+
     effective_type = checkpointer_type or config.effective_checkpointer_type
 
     if effective_type == "memory":
         return _create_memory_checkpointer()
     elif effective_type == "postgres":
         if not connection_string:
-            connection_string = config.postgres_connection_string
+            connection_string = config.database_connection_string
         if not connection_string:
             logger.error(
                 "Postgres checkpointer requested but no connection string available"

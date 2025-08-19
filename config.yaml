@@ -9,20 +9,26 @@ application:
   log_level: "INFO"
   secrets_scope: "doc-intelligence"
 
+# Databricks Configuration
+databricks:
+  host: "https://your-workspace.cloud.databricks.com"
+  token: "your-databricks-token"
+
 agent:
   # Endpoints - will be read from secrets if null
   llm_endpoint: null
-  embedding_endpoint: null
+  embedding_endpoint: databricks-gte-large
 
   # Job configuration for DocumentService
   job_id: null # Optional: existing job ID to use
   default_cluster_key: "default_cluster"
-  processing_notebook_path: "/Workspace/notebooks/document_processing"
+  processing_notebook_path: "/Workspace/Users/scott.mckean@databricks.com/Repos/doc-intelligence-app/ai_parse_with_db.ipynb"
 
   # LLM Configuration
   llm:
     max_tokens: 512
     temperature: 0.1
+    endpoint: databricks-claude-sonnet-4
 
   # RAG Configuration
   rag:
@@ -44,10 +50,11 @@ agent:
 
 # DatabaseService Configuration
 database:
-  host: "localhost"
+  instance_name: "shm"
+  host: "instance-f2715363-23e1-4f98-9d15-2b83f17e6d39.database.azuredatabricks.net"
   port: 5432
-  database: "doc_intelligence"
-  # user and password will be read from secrets
+  database: "databricks_postgres"
+  user: "scott.mckean@databricks.com"
 
   # Database pool configuration
   pool_size: 5
@@ -60,8 +67,8 @@ database:
 
 # StorageService Configuration
 storage:
-  volume_path: "/Volumes/main/default/documents"
-  max_file_size_mb: 100
+  volume_path: "/Volumes/shm/default/raw_pdfs"
+  max_file_size_mb: 30
   allowed_extensions: [".pdf", ".txt", ".docx", ".md"]
 
 # DocumentService Configuration
@@ -76,8 +83,9 @@ embedding:
   chunk_size: 1000
   chunk_overlap: 200
   batch_size: 10
+  endpoint: databricks-gte-large-en
 
   # Vector Store Configuration
   vector_store:
-    collection_name: "document_chunks"
-    embedding_dimension: 768
+    collection_name: "parsed_pages"
+    embedding_dimension: 1024

@@ -72,10 +72,16 @@ class DotDict(dict):
             return default
 
 
-class DotConfig(DotDict):
-    """Configuration class with dot notation access."""
+class DocConfig(DotDict):
+    """Main configuration class with dot notation access and secret management."""
 
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str):
+        """
+        Initialize configuration from YAML file and secrets.
+
+        Args:
+            config_path: Path to YAML config file.
+        """
         # Determine the actual config path
         if not os.path.isabs(config_path):
             # Relative path - make it relative to project root
@@ -85,34 +91,18 @@ class DotConfig(DotDict):
         config_data = load_config(config_path)
         super().__init__(config_data)
 
-    def get(self, key_path: str, default: Any = None) -> Any:
-        """Get configuration value from config file."""
-        return self.get_nested(key_path, default)
-
-
-class ServiceConfig:
-    """Configuration for external services with graceful degradation."""
-
-    def __init__(self, config_file_path: Optional[str] = None):
-        """
-        Initialize configuration from YAML file and secrets.
-
-        Args:
-            config_file_path: Path to YAML config file. Defaults to config.yaml in project root.
-        """
-        # Load configuration using DotConfig
-        self.config = DotConfig(config_file_path or "config.yaml")
-
         # Service availability checks (cached)
         self._databricks_available = None
         self._database_available = None
 
+    def get(self, key_path: str, default: Any = None) -> Any:
+        """Get configuration value from config file."""
+        return self.get_nested(key_path, default)
+
     def _get_secret(self, secret_key: str) -> Optional[str]:
         """Get a secret value from Databricks secrets."""
         if dbutils and DATABRICKS_ENVIRONMENT:
-            secrets_scope = self.config.get(
-                "application.secrets_scope", "doc-intelligence"
-            )
+            secrets_scope = self.get("application.secrets_scope", "doc-intelligence")
             try:
                 value = dbutils.secrets.get(scope=secrets_scope, key=secret_key)
                 if value:
@@ -128,35 +118,31 @@ class ServiceConfig:
 
     @property
     def databricks_host(self) -> Optional[str]:
-        """Get Databricks host from secrets."""
-        return self._get_secret("databricks-host")
+        """Get Databricks host from config file."""
+        return self.get("databricks.host")
 
     @property
     def databricks_token(self) -> Optional[str]:
-        """Get Databricks token from secrets."""
-        return self._get_secret("databricks-token")
+        """Get Databricks token from config file."""
+        return self.get("databricks.token")
 
     @property
     def database_user(self) -> Optional[str]:
-        """Get database user from secrets."""
-        return self._get_secret("postgres-user")
+        """Get database user from config file."""
+        return self.get("database.user")
 
     @property
     def database_password(self) -> Optional[str]:
-        """Get database password from secrets."""
-        return self._get_secret("postgres-password")
+        """Get database password dynamically using Databricks SDK."""
+        # This will be generated dynamically when needed
+        return None
 
     @property
     def database_connection_string(self) -> Optional[str]:
         """Get database connection string if credentials are available."""
-        if not all([self.database_user, self.database_password]):
-            return None
-
-        host = self.config.get("database.host", "localhost")
-        port = self.config.get("database.port", 5432)
-        database = self.config.get("database.database", "doc_intelligence")
-
-        return f"postgresql://{self.database_user}:{self.database_password}@{host}:{port}/{database}"
+        # We don't build the connection string here since we need dynamic credentials
+        # The database service will handle this
+        return None
 
     @property
     def databricks_available(self) -> bool:
@@ -185,7 +171,7 @@ class ServiceConfig:
     @property
     def effective_checkpointer_type(self) -> str:
         """Get the effective checkpointer type based on configuration and availability."""
-        checkpointer_type = self.config.get("agent.checkpointer.type", "auto").lower()
+        checkpointer_type = self.get("agent.checkpointer.type", "auto").lower()
 
         if checkpointer_type == "postgres":
             if self.database_available:
@@ -207,13 +193,13 @@ class ServiceConfig:
 
     def get_status(self) -> Dict[str, Any]:
         """Get configuration status."""
-        secrets_scope = self.config.get("auth.secrets_scope", "doc-intelligence")
+        secrets_scope = self.get("auth.secrets_scope", "doc-intelligence")
 
         return {
             "application": {
-                "name": self.config.get("application.name", "Document Intelligence"),
-                "debug_mode": self.config.get("application.debug_mode", False),
-                "log_level": self.config.get("application.log_level", "INFO"),
+                "name": self.get("application.name", "Document Intelligence"),
+                "debug_mode": self.get("application.debug_mode", False),
+                "log_level": self.get("application.log_level", "INFO"),
                 "environment": "databricks" if DATABRICKS_ENVIRONMENT else "local",
             },
             "services": {
@@ -226,24 +212,27 @@ class ServiceConfig:
                 "secrets_scope": secrets_scope,
             },
             "config": {
-                "file_loaded": len(self.config) > 0,
-                "sections": (
-                    list(self.config.keys()) if isinstance(self.config, dict) else []
-                ),
+                "file_loaded": len(self) > 0,
+                "sections": (list(self.keys()) if isinstance(self, dict) else []),
             },
         }
 
-    def reload_config(self, config_file_path: Optional[str] = None):
+    def reload_config(self, config_file_path: str):
         """Reload configuration from file."""
         logger.info("Reloading configuration...")
-        self.config = DotConfig(config_file_path or "config.yaml")
+
+        # Determine the actual config path
+        if not os.path.isabs(config_file_path):
+            # Relative path - make it relative to project root
+            project_root = Path(__file__).parent.parent.parent
+            config_file_path = str(project_root / config_file_path)
+
+        config_data = load_config(config_file_path)
+        self.clear()
+        self.update(config_data)
 
         # Reset cached availability checks
         self._databricks_available = None
         self._database_available = None
 
         logger.info("Configuration reloaded successfully")
-
-
-# Global configuration instance
-config = ServiceConfig()

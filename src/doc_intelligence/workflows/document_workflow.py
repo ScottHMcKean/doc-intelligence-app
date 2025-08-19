@@ -2,7 +2,7 @@
 
 import logging
 import time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
@@ -10,7 +10,6 @@ from ..services import (
     StorageService,
     DocumentService,
     DatabaseService,
-    EmbeddingService,
 )
 from ..utils import get_current_user
 
@@ -26,13 +25,11 @@ class DocumentWorkflow:
         storage_service: StorageService,
         document_service: DocumentService,
         database_service: DatabaseService,
-        embedding_service: EmbeddingService,
     ):
         self.client = client
         self.storage_service = storage_service
         self.document_service = document_service
         self.database_service = database_service
-        self.embedding_service = embedding_service
 
     def process_document(
         self, file_content: bytes, filename: str, username: Optional[str] = None
@@ -52,7 +49,7 @@ class DocumentWorkflow:
 
         # Get username if not provided
         if not username:
-            username = self.auth_service.get_current_user()
+            username = get_current_user(self.client)
 
         # Create user record
         user = self.database_service.create_user(username)
@@ -134,12 +131,13 @@ class DocumentWorkflow:
         self, doc_hash: str, run_id: Optional[int] = None, timeout_seconds: int = 300
     ) -> Dict[str, Any]:
         """
-        Poll for processing completion and finalize.
+        Poll for AI parsing completion by checking the database for processed results.
+        The AI parsing job will append rows to the database with user_id and file_path.
 
         Returns:
             Dict with polling results
         """
-        logger.info(f"Polling for document processing completion: {doc_hash}")
+        logger.info(f"Polling for AI parsing completion: {doc_hash}")
 
         # Get document
         document = self.database_service.get_document_by_hash(doc_hash)
@@ -150,79 +148,62 @@ class DocumentWorkflow:
                 "doc_hash": doc_hash,
             }
 
-        # If we have a run_id, poll for job completion
-        if run_id:
-            start_time = time.time()
-            while time.time() - start_time < timeout_seconds:
-                job_success, status_info, status_message = (
-                    self.document_service.check_job_status(run_id)
-                )
+        # Extract file path and user ID for polling
+        file_path = document.get("original_path") or document.get("filename")
+        user_id = document.get("user_id")
 
-                if job_success and status_info:
-                    state = status_info.get("state")
-                    result_state = status_info.get("result_state")
+        if not file_path or not user_id:
+            return {
+                "success": False,
+                "error": "Document missing file path or user ID",
+                "doc_hash": doc_hash,
+            }
 
-                    if state == "TERMINATED":
-                        if result_state == "SUCCESS":
-                            logger.info(f"Job {run_id} completed successfully")
-                            break
-                        else:
-                            logger.error(
-                                f"Job {run_id} failed with result: {result_state}"
-                            )
-                            self.database_service.update_document_status(
-                                str(document.id),
-                                "failed",
-                                f"Job failed: {result_state}",
-                            )
-                            return {
-                                "success": False,
-                                "error": f"Processing job failed: {result_state}",
-                                "doc_hash": doc_hash,
-                            }
+        logger.info(f"Polling database for file: {file_path}, user: {user_id}")
 
-                time.sleep(5)  # Poll every 5 seconds
-            else:
-                # Timeout reached
-                logger.warning(f"Polling timeout for document {doc_hash}")
+        # Poll the database every 2 seconds for AI parsing completion
+        start_time = time.time()
+        while time.time() - start_time < timeout_seconds:
+            # Check if AI parsing has completed by looking for processed chunks
+            completion_result = self.database_service.check_ai_parsing_completion(
+                file_path, user_id
+            )
+
+            if completion_result and completion_result.get("completed"):
+                logger.info(f"AI parsing completed for document {doc_hash}")
+
+                # Update document status to processed
                 self.database_service.update_document_status(
-                    str(document.id), "failed", "Processing timeout"
+                    str(document["id"]), "processed"
                 )
+
                 return {
-                    "success": False,
-                    "error": "Processing timeout",
+                    "success": True,
                     "doc_hash": doc_hash,
+                    "message": "AI parsing completed successfully",
+                    "results": completion_result,
+                    "total_chunks": completion_result.get("total_chunks", 0),
                 }
 
-        # Try to download processed content
-        processed_path = (
-            f"{self.storage_service.client}/processed/{doc_hash}_processed.json"
+            # Wait 2 seconds before next poll
+            time.sleep(2)
+
+            # Log progress every 10 seconds
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0:
+                logger.info(f"Still polling... {int(elapsed)}s elapsed")
+
+        # Timeout reached
+        logger.warning(f"AI parsing polling timeout for document {doc_hash}")
+        self.database_service.update_document_status(
+            str(document["id"]), "failed", "AI parsing timeout"
         )
-        download_success, processed_content, download_message = (
-            self.storage_service.download_file(processed_path)
-        )
 
-        if download_success and processed_content:
-            # Process the AI-parsed content
-            self._process_ai_parsed_content(str(document.id), processed_content)
-
-            # Update document status
-            self.database_service.update_document_status(str(document.id), "processed")
-
-            return {
-                "success": True,
-                "doc_hash": doc_hash,
-                "message": "Document processing completed successfully",
-            }
-        else:
-            logger.warning(f"Failed to download processed content: {download_message}")
-            # Keep the immediate processing results
-            self.database_service.update_document_status(str(document.id), "processed")
-            return {
-                "success": True,
-                "doc_hash": doc_hash,
-                "message": "Document processed with basic chunking (AI processing unavailable)",
-            }
+        return {
+            "success": False,
+            "error": "AI parsing timeout - no results found in database",
+            "doc_hash": doc_hash,
+        }
 
     def _extract_text_content(
         self, file_content: bytes, filename: str
@@ -248,33 +229,18 @@ class DocumentWorkflow:
             return f"[Error] Failed to extract content from {filename}: {str(e)}"
 
     def _process_content_immediately(self, document_id: str, content: str):
-        """Process content immediately for basic chunking and embedding."""
+        """Process content immediately for basic chunking and storage."""
         try:
-            # Chunk the content
-            chunk_success, chunks, chunk_message = self.embedding_service.chunk_text(
-                content
-            )
-            if not chunk_success:
-                logger.warning(f"Chunking failed: {chunk_message}")
-                return
+            # Simple chunking - split by paragraphs or sentences
+            chunks = self._simple_chunk_text(content)
 
-            # Generate embeddings
-            embed_success, embeddings, embed_message = (
-                self.embedding_service.generate_embeddings(chunks)
-            )
-            if not embed_success:
-                logger.warning(f"Embedding generation failed: {embed_message}")
-                embeddings = [None] * len(chunks)  # Use None for embeddings
-
-            # Prepare chunk data
+            # Prepare chunk data for database storage
             chunk_data = []
-            for i, (chunk, embedding) in enumerate(
-                zip(chunks, embeddings or [None] * len(chunks))
-            ):
+            for i, chunk in enumerate(chunks):
                 chunk_data.append(
                     {
                         "content": chunk,
-                        "embedding": embedding,
+                        "embedding": None,  # Embeddings are handled separately
                         "metadata": {
                             "chunk_index": i,
                             "processing_method": "immediate",
@@ -284,12 +250,63 @@ class DocumentWorkflow:
                     }
                 )
 
-            # Store chunks
+            # Store chunks in database
             self.database_service.store_document_chunks(document_id, chunk_data)
             logger.info(f"Stored {len(chunk_data)} chunks for immediate processing")
 
         except Exception as e:
             logger.error(f"Failed to process content immediately: {e}")
+
+    def _simple_chunk_text(self, text: str, chunk_size: int = 1000) -> List[str]:
+        """Simple text chunking by paragraphs and sentences."""
+        # Split by double newlines first (paragraphs)
+        paragraphs = text.split("\n\n")
+        chunks = []
+        current_chunk = ""
+
+        for paragraph in paragraphs:
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+
+            # If adding this paragraph would exceed chunk size, save current chunk
+            if len(current_chunk) + len(paragraph) > chunk_size and current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = paragraph
+            else:
+                if current_chunk:
+                    current_chunk += "\n\n" + paragraph
+                else:
+                    current_chunk = paragraph
+
+        # Add the last chunk if it exists
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+
+        # If we have no chunks or chunks are too large, split by sentences
+        if not chunks or any(len(chunk) > chunk_size * 2 for chunk in chunks):
+            sentences = text.replace("\n", " ").split(". ")
+            chunks = []
+            current_chunk = ""
+
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+
+                if len(current_chunk) + len(sentence) > chunk_size and current_chunk:
+                    chunks.append(current_chunk.strip() + ".")
+                    current_chunk = sentence
+                else:
+                    if current_chunk:
+                        current_chunk += " " + sentence
+                    else:
+                        current_chunk = sentence
+
+            if current_chunk:
+                chunks.append(current_chunk.strip() + ".")
+
+        return chunks
 
     def _process_ai_parsed_content(self, document_id: str, processed_content: bytes):
         """Process AI-parsed content from Databricks job."""

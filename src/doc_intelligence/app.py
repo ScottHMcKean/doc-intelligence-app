@@ -7,12 +7,15 @@ from .services import (
     StorageService,
     DocumentService,
     DatabaseService,
-    EmbeddingService,
     AgentService,
 )
-from .utils import create_workspace_client, get_current_user
+from .utils import (
+    create_workspace_client,
+    get_current_user,
+    validate_databricks_connection,
+)
 from .workflows import DocumentWorkflow, ConversationWorkflow
-from .config import config
+from .config import DocConfig
 
 logger = logging.getLogger(__name__)
 
@@ -28,45 +31,35 @@ class DocumentIntelligenceApp:
     - Command line tools
     """
 
-    def __init__(self):
+    def __init__(self, config_path: str = "./config.yaml"):
         """Initialize the application with all services and workflows."""
         logger.info("Initializing Document Intelligence Application")
 
+        # Initialize configuration
+        self.config = DocConfig(config_path)
+
         # Create Databricks workspace client
         self.databricks_client = create_workspace_client(
-            host=config.databricks_host, token=config.databricks_token
+            host=self.config.databricks_host, token=self.config.databricks_token
         )
 
         # Initialize core services with consistent API
         self.database_service = DatabaseService(
-            client=self.databricks_client, config=config.config.get("database", {})
+            client=self.databricks_client, config=self.config
         )
 
         self.storage_service = StorageService(
-            client=self.databricks_client, config=config.config.get("storage", {})
+            client=self.databricks_client, config=self.config.storage
         )
 
         self.document_service = DocumentService(
-            client=self.databricks_client, config=config.config.get("document", {})
-        )
-
-        # EmbeddingService needs the embedding endpoint from agent config
-        agent_config = config.config.get("agent", {})
-        self.embedding_service = EmbeddingService(
-            client=self.databricks_client,
-            config=config.config.get("embedding", {}),
-            embedding_endpoint=agent_config.get("embedding_endpoint"),
+            client=self.databricks_client, config=self.config.document
         )
 
         self.agent_service = AgentService(
-            client=self.databricks_client, config=agent_config
+            client=self.databricks_client,
+            config=self.config,
         )
-
-        # Initialize vector store if available
-        if self.database_service.is_available:
-            self.embedding_service.init_vectorstore(
-                self.database_service.connection_string
-            )
 
         # Initialize workflows
         self.document_workflow = DocumentWorkflow(
@@ -74,13 +67,11 @@ class DocumentIntelligenceApp:
             storage_service=self.storage_service,
             document_service=self.document_service,
             database_service=self.database_service,
-            embedding_service=self.embedding_service,
         )
 
         self.conversation_workflow = ConversationWorkflow(
             client=self.databricks_client,
             database_service=self.database_service,
-            embedding_service=self.embedding_service,
             agent_service=self.agent_service,
         )
 
@@ -90,53 +81,53 @@ class DocumentIntelligenceApp:
 
     def get_system_status(self) -> Dict[str, Any]:
         """Get overall system status and service availability."""
-        auth_valid, auth_msg = self.auth_service.validate_connection()
+        # Validate Databricks connection
+        databricks_valid, databricks_msg = validate_databricks_connection(
+            self.databricks_client
+        )
         db_valid, db_msg = self.database_service.test_connection()
 
         return {
             "services": {
-                "databricks_auth": {"available": auth_valid, "message": auth_msg},
-                "database": {"available": db_valid, "message": db_msg},
-                "embeddings": {
-                    "available": self.embedding_service.is_available,
-                    "vectorstore_available": self.embedding_service.vectorstore_available,
-                    "message": (
-                        "Databricks embedding endpoint configured"
-                        if self.embedding_service.is_available
-                        else "Databricks embedding endpoint not configured"
-                    ),
+                "databricks": {
+                    "available": databricks_valid,
+                    "message": databricks_msg,
                 },
+                "database": {"available": db_valid, "message": db_msg},
                 "agent": {
                     "available": self.agent_service.is_available,
+                    "rag_available": self.agent_service.rag_available,
+                    "vector_search_available": self.agent_service.rag_available,
                     "message": (
-                        "Databricks LLM and agent capabilities configured"
+                        "Databricks LLM and agent capabilities configured with PGVector"
                         if self.agent_service.is_available
                         else "Databricks LLM and agent capabilities not configured"
                     ),
                 },
                 "storage": {
-                    "available": self.auth_service.is_available,  # Storage depends on auth
+                    "available": databricks_valid,  # Storage depends on Databricks client
                     "message": (
                         "Databricks connection available"
-                        if self.auth_service.is_available
+                        if databricks_valid
                         else "Databricks connection not available"
                     ),
                 },
-                "processing": {
-                    "available": self.auth_service.is_available,  # Processing depends on auth
+                "document": {
+                    "available": databricks_valid,  # Document processing depends on Databricks client
                     "message": (
                         "Databricks connection available"
-                        if self.auth_service.is_available
+                        if databricks_valid
                         else "Databricks connection not available"
                     ),
                 },
             },
-            "configuration": config.get_status(),
+            "configuration": self.config.get_status(),
             "overall_health": all(
                 [
-                    auth_valid
-                    or not config.databricks_available,  # OK if not configured
-                    db_valid or not config.database_available,  # OK if not configured
+                    databricks_valid
+                    or not self.config.databricks_available,  # OK if not configured
+                    db_valid
+                    or not self.config.database_available,  # OK if not configured
                     True,  # Other services degrade gracefully
                 ]
             ),
@@ -144,7 +135,7 @@ class DocumentIntelligenceApp:
 
     def get_current_user(self) -> str:
         """Get current authenticated user."""
-        return self.auth_service.get_current_user()
+        return get_current_user(self.databricks_client)
 
     # Document Operations
 
@@ -183,7 +174,7 @@ class DocumentIntelligenceApp:
         if not user:
             return []
 
-        documents = self.database_service.get_user_documents(str(user.id))
+        documents = self.database_service.get_user_documents(user["id"])
 
         doc_list = []
         for doc in documents:
@@ -270,12 +261,8 @@ class DocumentIntelligenceApp:
         self, query: str, document_hashes: Optional[List[str]] = None, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """Search across documents using vector similarity."""
-        filter_dict = None
-        if document_hashes:
-            filter_dict = {"document_id": {"$in": document_hashes}}
-
-        search_success, results, message = self.embedding_service.similarity_search(
-            query=query, limit=limit, filter_dict=filter_dict
+        search_success, results, message = self.agent_service.search_documents(
+            query=query, limit=limit, document_ids=document_hashes
         )
 
         if search_success:
@@ -295,7 +282,7 @@ class DocumentIntelligenceApp:
 
         # Check critical services
         if not status["services"]["database"]["available"]:
-            if config.database_available:
+            if self.config.database_available:
                 issues.append(
                     "PostgreSQL connection failed despite credentials being configured"
                 )
@@ -304,20 +291,20 @@ class DocumentIntelligenceApp:
                     "Configure PostgreSQL for persistent storage and vector search"
                 )
 
-        if not status["services"]["databricks_auth"]["available"]:
-            if config.databricks_available:
+        if not status["services"]["databricks"]["available"]:
+            if self.config.databricks_available:
                 issues.append(
                     "Databricks connection failed despite credentials being configured"
                 )
             else:
                 recommendations.append("Configure Databricks for full AI capabilities")
 
-        if not status["services"]["embeddings"]["available"]:
+        if not status["services"]["agent"]["rag_available"]:
             recommendations.append(
                 "Configure Databricks embedding endpoint for vector search"
             )
 
-        if not status["services"]["chat"]["available"]:
+        if not status["services"]["agent"]["available"]:
             recommendations.append(
                 "Configure Databricks LLM endpoint for AI chat responses"
             )

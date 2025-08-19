@@ -6,8 +6,9 @@ from typing import Optional, Dict, Any
 import streamlit as st
 from databricks.sdk.service.jobs import NotebookTask, JobSettings, Task
 
-from ..auth import get_databricks_client
-from ..config import config
+from ..utils import get_databricks_client
+
+# Config will be passed as parameter to functions that need it
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ def queue_document_processing(
     doc_hash: str,
     job_cluster_key: str = "default_cluster",
     notebook_path: Optional[str] = None,
+    config=None,
 ) -> Optional[int]:
     """
     Queue a serverless job to process the document using ai_parse_document with graceful error handling.
@@ -32,18 +34,30 @@ def queue_document_processing(
     Returns:
         Job run ID if successful, None otherwise
     """
+    # Create fallback config for backwards compatibility
+    if config is None:
+        try:
+            from ..config import DocConfig
+
+            config = DocConfig("./config.yaml")
+        except:
+            logger.error("Could not load configuration")
+            config = None
+
     # Use configured job ID or default notebook path
-    if config.databricks_job_id:
+    job_id = config.get("agent.job_id") if config else None
+    if job_id:
         # If a pre-configured job exists, use it
-        return queue_existing_job(input_path, output_path, doc_hash)
-    
+        return queue_existing_job(input_path, output_path, doc_hash, config=config)
+
     notebook_path = notebook_path or "/Workspace/Users/shared/document_processor"
-    
+
     # Check if Databricks is available
-    if not config.databricks_available:
+    if not config or not config.databricks_available:
         logger.warning("Databricks not available, simulating job queue")
         st.warning("⚠️ Databricks not connected. Document processing will be simulated.")
         import random
+
         run_id = random.randint(10000, 99999)
         st.info(f"📝 Simulated processing job queued. Run ID: {run_id}")
         return run_id
@@ -118,15 +132,31 @@ def queue_document_processing(
         return None
 
 
-def queue_existing_job(input_path: str, output_path: str, doc_hash: str) -> Optional[int]:
+def queue_existing_job(
+    input_path: str, output_path: str, doc_hash: str, config=None
+) -> Optional[int]:
     """Queue processing using an existing Databricks job."""
+    # Create fallback config for backwards compatibility
+    if config is None:
+        try:
+            from ..config import DocConfig
+
+            config = DocConfig("./config.yaml")
+        except:
+            logger.error("Could not load configuration")
+            return None
+
     try:
         client = get_databricks_client()
         if not client:
             logger.error("Failed to get Databricks client for existing job")
             return None
 
-        job_id = int(config.databricks_job_id)
+        job_id_str = config.get("agent.job_id") if config else None
+        if not job_id_str:
+            logger.error("No job ID configured")
+            return None
+        job_id = int(job_id_str)
         logger.info(f"Using existing job {job_id} for document processing")
 
         # Run the existing job with parameters
@@ -140,7 +170,9 @@ def queue_existing_job(input_path: str, output_path: str, doc_hash: str) -> Opti
         )
 
         run_id = run_response.run_id
-        logger.info(f"Successfully queued existing job {run_id} for document {doc_hash}")
+        logger.info(
+            f"Successfully queued existing job {run_id} for document {doc_hash}"
+        )
         st.success(f"✅ Processing job queued using existing job. Run ID: {run_id}")
 
         return run_id
@@ -151,15 +183,25 @@ def queue_existing_job(input_path: str, output_path: str, doc_hash: str) -> Opti
         return None
 
 
-def check_job_status(run_id: int) -> Optional[Dict[str, Any]]:
+def check_job_status(run_id: int, config=None) -> Optional[Dict[str, Any]]:
     """
     Check the status of a document processing job with graceful error handling.
 
     Returns:
         Job status information if successful, None otherwise
     """
+    # Create fallback config for backwards compatibility
+    if config is None:
+        try:
+            from ..config import DocConfig
+
+            config = DocConfig("./config.yaml")
+        except:
+            logger.error("Could not load configuration")
+            config = None
+
     # Check if Databricks is available
-    if not config.databricks_available:
+    if not config or not config.databricks_available:
         logger.warning("Databricks not available, returning simulated job status")
         return {
             "run_id": run_id,
@@ -168,17 +210,17 @@ def check_job_status(run_id: int) -> Optional[Dict[str, Any]]:
             "start_time": None,
             "end_time": None,
             "run_page_url": None,
-            "simulated": True
+            "simulated": True,
         }
-    
+
     try:
         client = get_databricks_client()
         if not client:
             logger.error("Failed to get Databricks client for job status check")
             return None
-            
+
         run_info = client.jobs.get_run(run_id)
-        
+
         status_info = {
             "run_id": run_id,
             "state": (
@@ -192,9 +234,9 @@ def check_job_status(run_id: int) -> Optional[Dict[str, Any]]:
             "start_time": run_info.start_time,
             "end_time": run_info.end_time,
             "run_page_url": run_info.run_page_url,
-            "simulated": False
+            "simulated": False,
         }
-        
+
         logger.info(f"Job {run_id} status: {status_info['state']}")
         return status_info
 

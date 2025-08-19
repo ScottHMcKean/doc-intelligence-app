@@ -10,8 +10,9 @@ from typing import Optional, Tuple
 import streamlit as st
 from databricks.sdk import WorkspaceClient
 
-from ..auth import get_databricks_client
-from ..config import config
+from ..utils import get_databricks_client
+
+# Config will be passed as parameter to functions that need it
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ def upload_document(
     filename: str,
     username: str,
     input_volume_path: Optional[str] = None,
+    config=None,
 ) -> Tuple[str, str]:
     """
     Upload document to Databricks volume with graceful error handling.
@@ -36,10 +38,20 @@ def upload_document(
     Returns:
         Tuple of (document_hash, uploaded_file_path)
     """
+    # Create fallback config for backwards compatibility
+    if config is None:
+        try:
+            from ..config import DocConfig
+
+            config = DocConfig("./config.yaml")
+        except:
+            logger.error("Could not load configuration")
+            config = None
+
     # Use configured volume path or default
     volume_path = (
         input_volume_path
-        or config.databricks_volume_path
+        or (config.get("storage.volume_path") if config else None)
         or "/Volumes/main/default/documents"
     )
 
@@ -84,6 +96,7 @@ def poll_processed_document(
     output_volume_path: Optional[str] = None,
     timeout_seconds: int = 300,
     poll_interval: int = 5,
+    config=None,
 ) -> Optional[str]:
     """
     Poll for processed document in output volume with graceful error handling.
@@ -91,12 +104,22 @@ def poll_processed_document(
     Returns:
         Path to processed document if found, None if timeout.
     """
+    # Create fallback config for backwards compatibility
+    if config is None:
+        try:
+            from ..config import DocConfig
+
+            config = DocConfig("./config.yaml")
+        except:
+            logger.error("Could not load configuration")
+            config = None
+
     # Use configured volume path or default
-    volume_path = (
-        output_volume_path
-        or f"{config.databricks_volume_path}/processed"
-        or "/Volumes/main/default/documents/processed"
-    )
+    storage_volume_path = (
+        config.get("storage.volume_path") if config else None
+    ) or "/Volumes/main/default/documents"
+
+    volume_path = output_volume_path or f"{storage_volume_path}/processed"
     processed_filename = f"{doc_hash}_processed.json"
     processed_path = f"{volume_path}/{processed_filename}"
 
@@ -130,7 +153,7 @@ def poll_processed_document(
             while time.time() - start_time < timeout_seconds:
                 try:
                     # Check if processed file exists
-                    client.files.download(processed_path)
+                    result = client.files.download(processed_path)
                     logger.info(f"Found processed document: {processed_path}")
                     st.success("✅ Document processing completed!")
                     return processed_path
@@ -153,10 +176,20 @@ def poll_processed_document(
         return None
 
 
-def download_processed_document(file_path: str) -> Optional[bytes]:
+def download_processed_document(file_path: str, config=None) -> Optional[bytes]:
     """Download processed document from volume with graceful error handling."""
+    # Create fallback config for backwards compatibility
+    if config is None:
+        try:
+            from ..config import DocConfig
+
+            config = DocConfig("./config.yaml")
+        except:
+            logger.error("Could not load configuration")
+            config = None
+
     # Check if Databricks is available
-    if not config.databricks_available:
+    if not config or not config.databricks_available:
         logger.warning("Databricks not available, returning sample processed content")
         # Return sample processed document content for demo purposes
         mock_processed_content = {
@@ -199,7 +232,9 @@ def download_processed_document(file_path: str) -> Optional[bytes]:
 
         logger.info(f"Downloading processed document from: {file_path}")
         result = client.files.download(file_path)
-        return result.contents
+        # Extract bytes from the streaming response
+        content_bytes = result.contents.read()
+        return content_bytes
 
     except Exception as e:
         logger.error(f"Failed to download processed document {file_path}: {str(e)}")

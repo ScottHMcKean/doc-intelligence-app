@@ -45,6 +45,30 @@ def create_workspace_client(
         return None
 
 
+def get_databricks_client() -> Optional[WorkspaceClient]:
+    """
+    Get authenticated Databricks workspace client with graceful error handling.
+    This is a simplified version that doesn't require Streamlit.
+    """
+    try:
+        # Try to get configuration from environment or Databricks CLI
+        sdk_config = Config()
+
+        if not sdk_config.host:
+            logger.warning("Databricks host not configured")
+            return None
+
+        client = WorkspaceClient(config=sdk_config)
+        # Test the connection
+        client.current_user.me()
+        logger.info("Successfully connected to Databricks")
+        return client
+
+    except Exception as e:
+        logger.error(f"Failed to create Databricks client: {str(e)}")
+        return None
+
+
 def get_current_user(client: Optional[WorkspaceClient] = None) -> str:
     """
     Get the current authenticated user's username with fallback.
