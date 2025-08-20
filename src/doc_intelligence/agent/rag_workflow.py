@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Required imports - now always available
 try:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_community.vectorstores.pgvector import PGVector
+    from langchain_postgres import PGVector
     from databricks_langchain import DatabricksEmbeddings
 except ImportError as e:
     logger.error(f"Failed to import required dependencies: {e}")
@@ -99,8 +99,8 @@ class RAGWorkflow:
         else:
             try:
                 self.vectorstore = PGVector(
-                    connection_string=self.postgres_connection,
-                    embedding_function=self.embeddings,
+                    embeddings=self.embeddings,  # First positional parameter
+                    connection=self.postgres_connection,
                     collection_name="document_chunks",
                     pre_delete_collection=False,
                 )

@@ -49,13 +49,19 @@ def create_checkpointer(
 
         config = DocConfig("./config.yaml")
 
-    effective_type = checkpointer_type or config.effective_checkpointer_type
+    effective_type = checkpointer_type or config.get(
+        "agent.conversation.checkpointer_type", "auto"
+    )
 
     if effective_type == "memory":
         return _create_memory_checkpointer()
     elif effective_type == "postgres":
         if not connection_string:
-            connection_string = config.database_connection_string
+            # Connection string will be generated dynamically by database service
+            logger.warning(
+                "No connection string provided, postgres checkpointer not available"
+            )
+            return None
         if not connection_string:
             logger.error(
                 "Postgres checkpointer requested but no connection string available"

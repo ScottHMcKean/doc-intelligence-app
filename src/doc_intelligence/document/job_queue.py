@@ -45,7 +45,7 @@ def queue_document_processing(
             config = None
 
     # Use configured job ID or default notebook path
-    job_id = config.get("agent.job_id") if config else None
+    job_id = config.get("document.job_id") if config else None
     if job_id:
         # If a pre-configured job exists, use it
         return queue_existing_job(input_path, output_path, doc_hash, config=config)
@@ -152,7 +152,7 @@ def queue_existing_job(
             logger.error("Failed to get Databricks client for existing job")
             return None
 
-        job_id_str = config.get("agent.job_id") if config else None
+        job_id_str = config.get("document.job_id") if config else None
         if not job_id_str:
             logger.error("No job ID configured")
             return None

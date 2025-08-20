@@ -9,21 +9,11 @@ import uuid
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, add_messages
 
-from ..database.schema import DatabaseManager
-
 logger = logging.getLogger(__name__)
 
-# Required imports with graceful fallback
-try:
-    from databricks_langchain import ChatDatabricks
-    from langgraph.checkpoint.postgres import PostgresSaver
-    from langchain_community.vectorstores.pgvector import PGVector
-except ImportError as e:
-    logger.error(f"Failed to import required dependencies: {e}")
-    raise ImportError(
-        f"Missing required dependencies for agent service: {e}. "
-        "Please ensure all dependencies are installed."
-    )
+from databricks_langchain import ChatDatabricks
+from langgraph.checkpoint.postgres import PostgresSaver
+from langchain_postgres import PGVector
 
 
 class ChatState(TypedDict):
@@ -75,14 +65,9 @@ class AgentService:
 
         try:
             # Get database instance name from config
-            if hasattr(self.config, "database"):
-                instance_name = self.config.database.instance_name
-                user = self.config.database.user
-                database = self.config.database.database
-            else:
-                instance_name = self.config.get("database.instance_name")
-                user = self.config.get("database.user", "databricks")
-                database = self.config.get("database.database", "databricks_postgres")
+            instance_name = self.config.get("database.instance_name")
+            user = self.config.get("database.user", "databricks")
+            database = self.config.get("database.database", "databricks_postgres")
 
             if not instance_name:
                 return None
@@ -135,9 +120,9 @@ class AgentService:
             from databricks_langchain import DatabricksEmbeddings
 
             # Try to get endpoint from agent config first, then fall back to embedding config
-            endpoint = self.config.get("agent.embedding_endpoint") or self.config.get(
-                "embedding.endpoint"
-            )
+            endpoint = self.config.get(
+                "agent.retrieval.embedding_endpoint"
+            ) or self.config.get("embedding.endpoint")
             if not endpoint:
                 logger.warning("No embedding endpoint configured")
                 return
@@ -161,9 +146,14 @@ class AgentService:
                 return
 
             # PGVector already exists in the managed instance, just initialize connection
+            # Use the initialized embeddings instead of None
+            if not self.embeddings:
+                logger.warning("No embeddings available for vector store")
+                return
+
             self.vectorstore = PGVector(
-                connection_string=connection_string,
-                embedding_function=None,  # We handle embeddings separately
+                embeddings=self.embeddings,  # First positional parameter
+                connection=connection_string,
                 collection_name="document_chunks",
                 pre_delete_collection=False,
             )

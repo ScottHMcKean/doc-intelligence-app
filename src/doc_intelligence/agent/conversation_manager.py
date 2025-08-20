@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 try:
     from langgraph.checkpoint.postgres import PostgresSaver
     from databricks_langchain import ChatDatabricks, DatabricksEmbeddings
-    from langchain_community.vectorstores.pgvector import PGVector
+    from langchain_postgres import PGVector
 except ImportError as e:
     logger.error(f"Failed to import required dependencies: {e}")
     raise ImportError(
@@ -107,8 +107,8 @@ class ConversationManager:
         else:
             try:
                 self.vectorstore = PGVector(
-                    connection_string=self.postgres_connection,
-                    embedding_function=self.embeddings,
+                    embeddings=self.embeddings,  # First positional parameter
+                    connection=self.postgres_connection,
                     collection_name="document_chunks",
                     pre_delete_collection=False,
                 )

@@ -154,8 +154,8 @@ def render_sidebar(app: DocumentIntelligenceApp):
         current_user = app.get_current_user()
         st.text(f"Welcome, {current_user}")
 
-        # System status
-        with st.expander("System Status", expanded=False):
+        # Main Services Status
+        with st.expander("Service Status", expanded=False):
             status = app.get_system_status()
             for service, details in status["services"].items():
                 service_name = service.replace("_", " ").title()

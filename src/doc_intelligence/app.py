@@ -40,7 +40,7 @@ class DocumentIntelligenceApp:
 
         # Create Databricks workspace client
         self.databricks_client = create_workspace_client(
-            host=self.config.databricks_host, token=self.config.databricks_token
+            host=self.config.get("application.databricks_host"), token=None
         )
 
         # Initialize core services with consistent API
@@ -49,11 +49,11 @@ class DocumentIntelligenceApp:
         )
 
         self.storage_service = StorageService(
-            client=self.databricks_client, config=self.config.storage
+            client=self.databricks_client, config=self.config.get("storage", {})
         )
 
         self.document_service = DocumentService(
-            client=self.databricks_client, config=self.config.document
+            client=self.databricks_client, config=self.config.get("document", {})
         )
 
         self.agent_service = AgentService(
@@ -89,19 +89,18 @@ class DocumentIntelligenceApp:
 
         return {
             "services": {
-                "databricks": {
-                    "available": databricks_valid,
-                    "message": databricks_msg,
+                "database": {
+                    "available": db_valid,
+                    "message": db_msg,
                 },
-                "database": {"available": db_valid, "message": db_msg},
                 "agent": {
                     "available": self.agent_service.is_available,
                     "rag_available": self.agent_service.rag_available,
                     "vector_search_available": self.agent_service.rag_available,
                     "message": (
-                        "Databricks LLM and agent capabilities configured with PGVector"
+                        "AI agent and vector search capabilities available"
                         if self.agent_service.is_available
-                        else "Databricks LLM and agent capabilities not configured"
+                        else "AI agent capabilities not available"
                     ),
                 },
                 "storage": {
@@ -121,14 +120,19 @@ class DocumentIntelligenceApp:
                     ),
                 },
             },
-            "configuration": self.config.get_status(),
+            "configuration": {
+                "name": self.config.get("application.name", "Document Intelligence"),
+                "environment": (
+                    "databricks"
+                    if self.config.get("application.databricks_host")
+                    else "local"
+                ),
+            },
             "overall_health": all(
                 [
-                    databricks_valid
-                    or not self.config.databricks_available,  # OK if not configured
-                    db_valid
-                    or not self.config.database_available,  # OK if not configured
-                    True,  # Other services degrade gracefully
+                    db_valid,  # Database must be available
+                    databricks_valid,  # Databricks must be available
+                    self.agent_service.is_available,  # Agent service must be available
                 ]
             ),
         }
@@ -282,22 +286,9 @@ class DocumentIntelligenceApp:
 
         # Check critical services
         if not status["services"]["database"]["available"]:
-            if self.config.database_available:
-                issues.append(
-                    "PostgreSQL connection failed despite credentials being configured"
-                )
-            else:
-                recommendations.append(
-                    "Configure PostgreSQL for persistent storage and vector search"
-                )
-
-        if not status["services"]["databricks"]["available"]:
-            if self.config.databricks_available:
-                issues.append(
-                    "Databricks connection failed despite credentials being configured"
-                )
-            else:
-                recommendations.append("Configure Databricks for full AI capabilities")
+            recommendations.append(
+                "Configure PostgreSQL for persistent storage and vector search"
+            )
 
         if not status["services"]["agent"]["rag_available"]:
             recommendations.append(

@@ -29,14 +29,9 @@ class DatabaseService:
 
         try:
             # Get database instance name from config
-            if hasattr(self.config, "database"):
-                instance_name = self.config.database.instance_name
-                user = self.config.database.user
-                database = self.config.database.database
-            else:
-                instance_name = self.config.get("instance_name")
-                user = self.config.get("user", "databricks")
-                database = self.config.get("database", "databricks_postgres")
+            instance_name = self.config.get("database.instance_name")
+            user = self.config.get("database.user", "databricks")
+            database = self.config.get("database.database", "databricks_postgres")
 
             if not instance_name:
                 logger.error("No database instance_name configured")
@@ -95,10 +90,41 @@ class DatabaseService:
                     return False
 
                 with conn.cursor() as cur:
+                    # Check if users table exists and has required columns
+                    cur.execute(
+                        """
+                        SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_name = 'users'
+                    """
+                    )
+                    users_table_exists = cur.fetchone()
+
+                    if users_table_exists:
+                        # Check if databricks_user_id column exists
+                        cur.execute(
+                            """
+                            SELECT column_name 
+                            FROM information_schema.columns 
+                            WHERE table_name = 'users' AND column_name = 'databricks_user_id'
+                        """
+                        )
+                        if not cur.fetchone():
+                            # Add the missing column
+                            cur.execute(
+                                """
+                                ALTER TABLE users 
+                                ADD COLUMN databricks_user_id BIGINT
+                            """
+                            )
+                            logger.info(
+                                "Added databricks_user_id column to existing users table"
+                            )
+                            conn.commit()
                     # Create users table - use UUID for flexibility
                     cur.execute(
                         """
-                        CREATE OR REPLACE TABLE IF NOT EXISTS users (
+                        CREATE TABLE IF NOT EXISTS users (
                             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                             username VARCHAR(255) UNIQUE NOT NULL,
                             email VARCHAR(255),
@@ -112,7 +138,7 @@ class DatabaseService:
                     # Create conversations table
                     cur.execute(
                         """
-                        CREATE OR REPLACE TABLE conversations (
+                        CREATE TABLE IF NOT EXISTS conversations (
                             id UUID PRIMARY KEY,
                             user_id UUID NOT NULL REFERENCES users(id),
                             title VARCHAR(512) NOT NULL,
@@ -129,7 +155,7 @@ class DatabaseService:
                     # Create messages table
                     cur.execute(
                         """
-                        CREATE OR REPLACE TABLE messages (
+                        CREATE TABLE IF NOT EXISTS messages (
                             id UUID PRIMARY KEY,
                             conversation_id UUID NOT NULL REFERENCES conversations(id),
                             role VARCHAR(20) NOT NULL,
@@ -143,7 +169,7 @@ class DatabaseService:
                     # Create documents table
                     cur.execute(
                         """
-                        CREATE OR REPLACE TABLE documents (
+                        CREATE TABLE IF NOT EXISTS documents (
                             id UUID PRIMARY KEY,
                             doc_hash VARCHAR(64) UNIQUE NOT NULL,
                             filename VARCHAR(512) NOT NULL,
@@ -166,7 +192,7 @@ class DatabaseService:
                         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                         cur.execute(
                             """
-                            CREATE OR REPLACE TABLE document_chunks (
+                            CREATE TABLE IF NOT EXISTS document_chunks (
                                 id UUID PRIMARY KEY,
                                 document_id UUID NOT NULL REFERENCES documents(id),
                                 chunk_index INTEGER NOT NULL,
@@ -188,7 +214,7 @@ class DatabaseService:
                         # Fallback without VECTOR type
                         cur.execute(
                             """
-                            CREATE OR REPLACE TABLE document_chunks (
+                            CREATE TABLE IF NOT EXISTS document_chunks (
                                 id UUID PRIMARY KEY,
                                 document_id UUID NOT NULL REFERENCES documents(id),
                                 chunk_index INTEGER NOT NULL,
@@ -201,6 +227,28 @@ class DatabaseService:
                         """
                         )
                         logger.info("Created document_chunks table with JSONB fallback")
+
+                    # Check if users table needs the databricks_user_id column
+                    try:
+                        cur.execute(
+                            """
+                            SELECT column_name 
+                            FROM information_schema.columns 
+                            WHERE table_name = 'users' AND column_name = 'databricks_user_id'
+                        """
+                        )
+                        if not cur.fetchone():
+                            cur.execute(
+                                """
+                                ALTER TABLE users 
+                                ADD COLUMN databricks_user_id BIGINT
+                            """
+                            )
+                            logger.info(
+                                "Added databricks_user_id column to users table"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Could not add databricks_user_id column: {e}")
 
                     conn.commit()
                     logger.info("Database tables created successfully")
@@ -308,6 +356,31 @@ class DatabaseService:
                     return None
 
                 with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                    # Ensure the databricks_user_id column exists
+                    try:
+                        cur.execute(
+                            """
+                            SELECT column_name 
+                            FROM information_schema.columns 
+                            WHERE table_name = 'users' AND column_name = 'databricks_user_id'
+                        """
+                        )
+                        if not cur.fetchone():
+                            cur.execute(
+                                """
+                                ALTER TABLE users 
+                                ADD COLUMN databricks_user_id BIGINT
+                            """
+                            )
+                            conn.commit()
+                            logger.info(
+                                "Added databricks_user_id column to users table"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not ensure databricks_user_id column exists: {e}"
+                        )
+
                     # Determine if input is username or Databricks user ID
                     if isinstance(username_or_id, int):
                         # This is a Databricks user ID
