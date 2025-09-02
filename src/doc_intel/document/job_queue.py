@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import streamlit as st
 from databricks.sdk.service.jobs import NotebookTask, JobSettings, Task
 
-from ..utils import get_databricks_client
+from ..utils import get_workspace_client
 
 # Config will be passed as parameter to functions that need it
 
@@ -63,7 +63,7 @@ def queue_document_processing(
         return run_id
 
     try:
-        client = get_databricks_client()
+        client = get_workspace_client()
         if not client:
             logger.error("Failed to get Databricks client for job queue")
             st.error("❌ Unable to connect to Databricks for job queue")
@@ -147,7 +147,7 @@ def queue_existing_job(
             return None
 
     try:
-        client = get_databricks_client()
+        client = get_workspace_client()
         if not client:
             logger.error("Failed to get Databricks client for existing job")
             return None
@@ -214,7 +214,7 @@ def check_job_status(run_id: int, config=None) -> Optional[Dict[str, Any]]:
         }
 
     try:
-        client = get_databricks_client()
+        client = get_workspace_client()
         if not client:
             logger.error("Failed to get Databricks client for job status check")
             return None

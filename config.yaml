@@ -1,14 +1,12 @@
-# Document Intelligence Application Configuration
-# This file contains ALL configuration settings
-# Sensitive values (passwords, tokens) should be stored in Databricks secrets
+# Document Intelligence Configuration
+# This file is mean to contain all configuration settings except sensitive values
 
-# Application Configuration
 application:
   name: "Document Intelligence"
   debug_mode: false
   log_level: "INFO"
-  secrets_scope: "doc-intelligence"
-  databricks_host: "https://your-workspace.cloud.databricks.com"
+  secrets_scope: "doc-intel"
+  databricks_host: "https://adb-984752964297111.11.azuredatabricks.net/"
 
 agent:
   llm:
@@ -16,7 +14,7 @@ agent:
     temperature: 0.1
     endpoint: databricks-claude-sonnet-4
   retrieval:
-    embedding_endpoint: databricks-gte-large
+    embedding_endpoint: databricks-gte-large-en
     similarity_threshold: 0.7
     max_results: 5
   conversation:
@@ -26,7 +24,6 @@ agent:
     persistent_state: true
     checkpointer_type: "auto" # Options: "postgres", "memory", "auto"
 
-# DatabaseService Configuration
 database:
   instance_name: "shm"
   host: "instance-f2715363-23e1-4f98-9d15-2b83f17e6d39.database.azuredatabricks.net"

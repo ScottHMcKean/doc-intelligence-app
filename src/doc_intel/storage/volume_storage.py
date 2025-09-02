@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 import streamlit as st
 from databricks.sdk import WorkspaceClient
 
-from ..utils import get_databricks_client
+from ..utils import get_workspace_client
 
 # Config will be passed as parameter to functions that need it
 
@@ -69,7 +69,7 @@ def upload_document(
         return doc_hash, upload_path
 
     try:
-        client = get_databricks_client()
+        client = get_workspace_client()
         if not client:
             logger.error("Failed to get Databricks client")
             st.error("❌ Unable to connect to Databricks for upload")
@@ -139,7 +139,7 @@ def poll_processed_document(
         return processed_path
 
     try:
-        client = get_databricks_client()
+        client = get_workspace_client()
         if not client:
             logger.error("Failed to get Databricks client for polling")
             st.error("❌ Unable to connect to Databricks for polling")
@@ -224,7 +224,7 @@ def download_processed_document(file_path: str, config=None) -> Optional[bytes]:
         return json.dumps(mock_processed_content, indent=2).encode("utf-8")
 
     try:
-        client = get_databricks_client()
+        client = get_workspace_client()
         if not client:
             logger.error("Failed to get Databricks client for download")
             st.error("❌ Unable to connect to Databricks for download")

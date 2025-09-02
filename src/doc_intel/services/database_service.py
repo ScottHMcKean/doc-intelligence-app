@@ -90,47 +90,58 @@ class DatabaseService:
                     return False
 
                 with conn.cursor() as cur:
-                    # Check if users table exists and has required columns
-                    cur.execute(
-                        """
-                        SELECT table_name 
-                        FROM information_schema.tables 
-                        WHERE table_name = 'users'
-                    """
-                    )
-                    users_table_exists = cur.fetchone()
+                    # Create pgvector extension first
+                    try:
+                        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+                        logger.info("pgvector extension created/verified")
+                    except Exception as e:
+                        logger.warning(f"Could not create pgvector extension: {e}")
 
-                    if users_table_exists:
-                        # Check if databricks_user_id column exists
-                        cur.execute(
-                            """
-                            SELECT column_name 
-                            FROM information_schema.columns 
-                            WHERE table_name = 'users' AND column_name = 'databricks_user_id'
-                        """
-                        )
-                        if not cur.fetchone():
-                            # Add the missing column
-                            cur.execute(
-                                """
-                                ALTER TABLE users 
-                                ADD COLUMN databricks_user_id BIGINT
-                            """
-                            )
-                            logger.info(
-                                "Added databricks_user_id column to existing users table"
-                            )
-                            conn.commit()
-                    # Create users table - use UUID for flexibility
+                    # Create users table - use Databricks user ID as primary key
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS users (
-                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            id INTEGER PRIMARY KEY, -- Databricks user ID
                             username VARCHAR(255) UNIQUE NOT NULL,
                             email VARCHAR(255),
-                            databricks_user_id BIGINT, -- Store Databricks user ID separately if available
                             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
                             updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+                        )
+                    """
+                    )
+
+                    # Create documents table
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS documents (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            doc_hash VARCHAR(64) UNIQUE NOT NULL,
+                            filename VARCHAR(512) NOT NULL,
+                            original_path VARCHAR(1024),
+                            processed_path VARCHAR(1024),
+                            status VARCHAR(50) DEFAULT 'uploaded',
+                            file_size INTEGER,
+                            content_type VARCHAR(100),
+                            doc_metadata JSONB,
+                            user_id INTEGER NOT NULL REFERENCES users(id),
+                            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+                        )
+                    """
+                    )
+
+                    # Create document_chunks table with pgvector support
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS document_chunks (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            document_id UUID NOT NULL REFERENCES documents(id),
+                            chunk_index INTEGER NOT NULL,
+                            content TEXT NOT NULL,
+                            embedding VECTOR(768),
+                            chunk_metadata JSONB,
+                            token_count INTEGER,
+                            created_at TIMESTAMP WITH TIME ZONE NOT NULL
                         )
                     """
                     )
@@ -139,8 +150,8 @@ class DatabaseService:
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS conversations (
-                            id UUID PRIMARY KEY,
-                            user_id UUID NOT NULL REFERENCES users(id),
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            user_id INTEGER NOT NULL REFERENCES users(id),
                             title VARCHAR(512) NOT NULL,
                             thread_id VARCHAR(255) UNIQUE NOT NULL,
                             document_ids JSONB,
@@ -156,7 +167,7 @@ class DatabaseService:
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS messages (
-                            id UUID PRIMARY KEY,
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                             conversation_id UUID NOT NULL REFERENCES conversations(id),
                             role VARCHAR(20) NOT NULL,
                             content TEXT NOT NULL,
@@ -166,92 +177,69 @@ class DatabaseService:
                     """
                     )
 
-                    # Create documents table
+                    # Create vector search cache table
                     cur.execute(
                         """
-                        CREATE TABLE IF NOT EXISTS documents (
-                            id UUID PRIMARY KEY,
-                            doc_hash VARCHAR(64) UNIQUE NOT NULL,
-                            filename VARCHAR(512) NOT NULL,
-                            original_path VARCHAR(1024),
-                            processed_path VARCHAR(1024),
-                            status VARCHAR(50) DEFAULT 'uploaded',
-                            file_size INTEGER,
-                            content_type VARCHAR(100),
-                            doc_metadata JSONB,
-                            user_id UUID NOT NULL REFERENCES users(id),
+                        CREATE TABLE IF NOT EXISTS vector_search_cache (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            query_hash VARCHAR(64) UNIQUE NOT NULL,
+                            query_text TEXT NOT NULL,
+                            query_embedding VECTOR(768) NOT NULL,
+                            results JSONB NOT NULL,
+                            user_id INTEGER,
                             created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                            updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+                            expires_at TIMESTAMP
                         )
                     """
                     )
 
-                    # Create document_chunks table (try pgvector first, fallback to JSONB)
-                    try:
-                        # Try to create with pgvector extension
-                        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-                        cur.execute(
-                            """
-                            CREATE TABLE IF NOT EXISTS document_chunks (
-                                id UUID PRIMARY KEY,
-                                document_id UUID NOT NULL REFERENCES documents(id),
-                                chunk_index INTEGER NOT NULL,
-                                content TEXT NOT NULL,
-                                embedding VECTOR(768),
-                                chunk_metadata JSONB,
-                                token_count INTEGER,
-                                created_at TIMESTAMP WITH TIME ZONE NOT NULL
-                            )
-                        """
-                        )
-                        logger.info(
-                            "Created document_chunks table with pgvector support"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"pgvector not available, using JSONB fallback: {e}"
-                        )
-                        # Fallback without VECTOR type
-                        cur.execute(
-                            """
-                            CREATE TABLE IF NOT EXISTS document_chunks (
-                                id UUID PRIMARY KEY,
-                                document_id UUID NOT NULL REFERENCES documents(id),
-                                chunk_index INTEGER NOT NULL,
-                                content TEXT NOT NULL,
-                                embedding JSONB, -- Store as JSON array
-                                chunk_metadata JSONB,
-                                token_count INTEGER,
-                                created_at TIMESTAMP WITH TIME ZONE NOT NULL
-                            )
-                        """
-                        )
-                        logger.info("Created document_chunks table with JSONB fallback")
+                    # Create indexes for performance
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_documents_user_status ON documents(user_id, status)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_chunks_document ON document_chunks(document_id)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_user_status ON conversations(user_id, status)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)"
+                    )
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)"
+                    )
 
-                    # Check if users table needs the databricks_user_id column
+                    # Create vector indexes for similarity search
                     try:
                         cur.execute(
                             """
-                            SELECT column_name 
-                            FROM information_schema.columns 
-                            WHERE table_name = 'users' AND column_name = 'databricks_user_id'
-                        """
-                        )
-                        if not cur.fetchone():
-                            cur.execute(
-                                """
-                                ALTER TABLE users 
-                                ADD COLUMN databricks_user_id BIGINT
+                            CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw 
+                            ON document_chunks 
+                            USING hnsw (embedding vector_cosine_ops)
+                            WITH (m = 16, ef_construction = 64)
                             """
-                            )
-                            logger.info(
-                                "Added databricks_user_id column to users table"
-                            )
+                        )
+                        cur.execute(
+                            """
+                            CREATE INDEX IF NOT EXISTS idx_chunks_embedding_ivfflat 
+                            ON document_chunks 
+                            USING ivfflat (embedding vector_cosine_ops)
+                            WITH (lists = 100)
+                            """
+                        )
+                        logger.info("Vector indexes created successfully")
                     except Exception as e:
-                        logger.warning(f"Could not add databricks_user_id column: {e}")
+                        logger.warning(f"Could not create vector indexes: {e}")
 
                     conn.commit()
-                    logger.info("Database tables created successfully")
+                    logger.info("Database tables and indexes created successfully")
                     return True
 
         except Exception as e:
@@ -259,7 +247,7 @@ class DatabaseService:
             return False
 
     def check_ai_parsing_completion(
-        self, file_path: str, user_id: str
+        self, file_path: str, user_id: int
     ) -> Optional[Dict[str, Any]]:
         """
         Check if AI parsing has completed by looking for processed results in the database.
@@ -322,7 +310,7 @@ class DatabaseService:
             return None
 
     def get_document_by_file_path(
-        self, file_path: str, user_id: str
+        self, file_path: str, user_id: int
     ) -> Optional[Dict[str, Any]]:
         """Get document by file path and user ID."""
         if not self.client:
@@ -345,8 +333,21 @@ class DatabaseService:
             return None
 
     # User operations
-    def create_user(self, username_or_id: str | int) -> Optional[Dict[str, Any]]:
-        """Create or get existing user by username or ID."""
+    def create_user(
+        self,
+        username: str,
+        databricks_user_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create or get existing user by Databricks user ID and username.
+
+        Args:
+            username (str): The user's username (email).
+            databricks_user_id (int): Databricks user ID.
+
+        Returns:
+            Optional[Dict[str, Any]]: The user record as a dict, or None if creation failed.
+        """
         if not self.client:
             return None
 
@@ -356,79 +357,94 @@ class DatabaseService:
                     return None
 
                 with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                    # Ensure the databricks_user_id column exists
-                    try:
-                        cur.execute(
-                            """
-                            SELECT column_name 
-                            FROM information_schema.columns 
-                            WHERE table_name = 'users' AND column_name = 'databricks_user_id'
-                        """
-                        )
-                        if not cur.fetchone():
-                            cur.execute(
-                                """
-                                ALTER TABLE users 
-                                ADD COLUMN databricks_user_id BIGINT
-                            """
-                            )
-                            conn.commit()
-                            logger.info(
-                                "Added databricks_user_id column to users table"
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not ensure databricks_user_id column exists: {e}"
-                        )
+                    # Check if user exists by Databricks user ID
+                    cur.execute(
+                        "SELECT * FROM users WHERE id = %s",
+                        (databricks_user_id,),
+                    )
+                    user = cur.fetchone()
+                    if user:
+                        return dict(user)
 
-                    # Determine if input is username or Databricks user ID
-                    if isinstance(username_or_id, int):
-                        # This is a Databricks user ID
-                        databricks_user_id = username_or_id
-                        username = str(databricks_user_id)
+                    # Check if user exists by username
+                    cur.execute(
+                        "SELECT * FROM users WHERE username = %s",
+                        (username,),
+                    )
+                    user = cur.fetchone()
+                    if user:
+                        return dict(user)
 
-                        # Check if user exists by Databricks user ID
-                        cur.execute(
-                            "SELECT * FROM users WHERE databricks_user_id = %s",
-                            (databricks_user_id,),
-                        )
-                        user = cur.fetchone()
-                        if user:
-                            return dict(user)
-                    else:
-                        # This is a username string
-                        username = username_or_id
-                        databricks_user_id = None
-
-                        # Check if user exists by username
-                        cur.execute(
-                            "SELECT * FROM users WHERE username = %s", (username,)
-                        )
-                        user = cur.fetchone()
-                        if user:
-                            return dict(user)
-
-                    # Create new user with UUID
-                    user_id = str(uuid.uuid4())
+                    # If not found, create new user with Databricks user ID
                     now = datetime.now(timezone.utc)
 
                     cur.execute(
-                        """INSERT INTO users (id, username, databricks_user_id, created_at, updated_at) 
-                           VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-                        (user_id, username, databricks_user_id, now, now),
+                        """INSERT INTO users (id, username, created_at, updated_at) 
+                           VALUES (%s, %s, %s, %s) RETURNING *""",
+                        (databricks_user_id, username, now, now),
                     )
                     conn.commit()
                     new_user = cur.fetchone()
-                    logger.info(f"Created new user: {username} with ID: {user_id}")
+                    logger.info(
+                        f"Created new user: {username} with ID: {databricks_user_id}"
+                    )
                     return dict(new_user)
         except Exception as e:
-            logger.error(f"Failed to create user {username_or_id}: {str(e)}")
+            logger.error(
+                f"Failed to create user {username} (databricks_id={databricks_user_id}): {str(e)}"
+            )
             return None
+
+    def user_exists(self, username: str) -> bool:
+        """Check if a user exists in the database."""
+        if not self.client:
+            return False
+
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return False
+
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM users WHERE username = %s", (username,)
+                    )
+                    count = cur.fetchone()[0]
+                    return count > 0
+
+        except Exception as e:
+            logger.error(f"Failed to check if user {username} exists: {str(e)}")
+            return False
+
+    def verify_user_authentication(
+        self, username: str, databricks_user_id: int
+    ) -> bool:
+        """Verify that a user is authenticated and exists in the database."""
+        if not self.client:
+            return False
+
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return False
+
+                with conn.cursor() as cur:
+                    # Check if user exists with matching Databricks ID
+                    cur.execute(
+                        "SELECT COUNT(*) FROM users WHERE username = %s AND id = %s",
+                        (username, databricks_user_id),
+                    )
+                    count = cur.fetchone()[0]
+                    return count > 0
+
+        except Exception as e:
+            logger.error(f"Failed to verify user authentication: {str(e)}")
+            return False
 
     # Conversation operations
     def create_conversation(
         self,
-        user_id: str,  # User ID is now a UUID string
+        user_id: int,  # User ID is now Databricks user ID (integer)
         title: str,
         thread_id: str,
         document_ids: Optional[List[str]] = None,
@@ -468,7 +484,7 @@ class DatabaseService:
             logger.error(f"Failed to create conversation: {str(e)}")
             return None
 
-    def get_user_conversations(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_user_conversations(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all conversations for a user."""
         if not self.client:
             return []
@@ -511,6 +527,10 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Failed to update conversation title: {str(e)}")
             return False
+
+    def update_conversation_title_by_id(self, conversation_id: str, title: str) -> bool:
+        """Update conversation title by conversation ID."""
+        return self.update_conversation_title(conversation_id, title)
 
     def delete_conversation(self, conversation_id: str) -> bool:
         """Delete a conversation."""
@@ -605,7 +625,7 @@ class DatabaseService:
     # Document operations
     def create_document(
         self,
-        user_id: str,  # User ID is now a UUID string
+        user_id: int,  # User ID is now Databricks user ID (integer)
         doc_hash: str,
         filename: str,
         status: str = "uploaded",
@@ -696,7 +716,7 @@ class DatabaseService:
             logger.error(f"Failed to get document by hash {doc_hash}: {str(e)}")
             return None
 
-    def get_user_documents(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_user_documents(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all documents for a user."""
         if not self.client:
             return []
@@ -716,6 +736,39 @@ class DatabaseService:
                     return [dict(row) for row in cur.fetchall()]
         except Exception as e:
             logger.error(f"Failed to get documents for user {user_id}: {str(e)}")
+            return []
+
+    def get_user_documents_by_username(self, username: str) -> List[Dict[str, Any]]:
+        """Get all documents for a user by username."""
+        if not self.client:
+            return []
+
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return []
+
+                with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                    # First get the user ID
+                    cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+                    user_result = cur.fetchone()
+
+                    if not user_result:
+                        logger.warning(f"User {username} not found")
+                        return []
+
+                    user_id = user_result[0]
+
+                    # Then get the documents
+                    cur.execute(
+                        """SELECT * FROM documents 
+                           WHERE user_id = %s 
+                           ORDER BY created_at DESC""",
+                        (user_id,),
+                    )
+                    return [dict(row) for row in cur.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to get documents for user {username}: {str(e)}")
             return []
 
     # Document chunk operations
@@ -827,3 +880,110 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Vector search failed: {str(e)}")
             return []
+
+    def add_documents_to_conversation(
+        self, conversation_id: str, document_hashes: List[str]
+    ) -> bool:
+        """Add documents to an existing conversation."""
+        if not self.client:
+            return False
+
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return False
+
+                with conn.cursor() as cur:
+                    # Get current document_ids for the conversation
+                    cur.execute(
+                        "SELECT document_ids FROM conversations WHERE id = %s",
+                        (conversation_id,),
+                    )
+                    result = cur.fetchone()
+
+                    if not result:
+                        logger.error(f"Conversation {conversation_id} not found")
+                        return False
+
+                    current_doc_ids = result[0] or []
+
+                    # Add new document hashes (avoid duplicates)
+                    for doc_hash in document_hashes:
+                        if doc_hash not in current_doc_ids:
+                            current_doc_ids.append(doc_hash)
+
+                    # Update conversation with new document_ids
+                    cur.execute(
+                        """UPDATE conversations 
+                           SET document_ids = %s, updated_at = %s 
+                           WHERE id = %s""",
+                        (
+                            psycopg2.extras.Json(current_doc_ids),
+                            datetime.now(timezone.utc),
+                            conversation_id,
+                        ),
+                    )
+
+                    conn.commit()
+                    logger.info(
+                        f"Added {len(document_hashes)} documents to conversation {conversation_id}"
+                    )
+                    return True
+
+        except Exception as e:
+            logger.error(f"Failed to add documents to conversation: {str(e)}")
+            return False
+
+    def get_conversation_by_id(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Get conversation by ID."""
+        if not self.client:
+            return None
+
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return None
+
+                with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                    cur.execute(
+                        "SELECT * FROM conversations WHERE id = %s", (conversation_id,)
+                    )
+                    conversation = cur.fetchone()
+                    return dict(conversation) if conversation else None
+
+        except Exception as e:
+            logger.error(f"Failed to get conversation {conversation_id}: {str(e)}")
+            return None
+
+    def get_conversation_by_id_with_documents(
+        self, conversation_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get conversation by ID with associated document information."""
+        if not self.client:
+            return None
+
+        try:
+            with self.get_connection() as conn:
+                if not conn:
+                    return None
+
+                with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                    # Get conversation with document details
+                    cur.execute(
+                        """SELECT c.*, 
+                                  array_agg(d.filename) as document_filenames,
+                                  array_agg(d.status) as document_statuses
+                           FROM conversations c
+                           LEFT JOIN documents d ON d.doc_hash = ANY(c.document_ids)
+                           WHERE c.id = %s
+                           GROUP BY c.id""",
+                        (conversation_id,),
+                    )
+                    conversation = cur.fetchone()
+                    return dict(conversation) if conversation else None
+
+        except Exception as e:
+            logger.error(
+                f"Failed to get conversation {conversation_id} with documents: {str(e)}"
+            )
+            return None

@@ -1,112 +1,60 @@
-# Document Intelligence App 📄
+# Doc Intelligence on Databricks
 
-A comprehensive document intelligence application with Databricks integration, built with a modular, service-oriented architecture. Upload documents, process them with AI, and have intelligent conversations about their content using RAG (Retrieval Augmented Generation).
+This repository is a comprehensive document intelligence applicaton built on top of Databricks. It allows users to upload and process documents, and then have intelligent conversations with the documents they uploaded, or a global vector search database. See our blog for more information.
 
-## Features ✨
+## Buisness Problem
 
-- **Document Upload & Processing**: Upload documents and process them using Databricks AI parsing
-- **Intelligent Chat**: Chat with your documents using Databricks LLM models
-- **Vector Search**: Semantic search across document chunks using pgvector
-- **Conversation Management**: Persistent conversation storage with PostgreSQL
-- **Multi-Modal Chat**: Switch between document-specific chat and general chat
-- **Databricks Native**: Built specifically for Databricks environments with Unity Catalog
+Businesses waste valuable time searching through scattered documents for answers. Generic AI assistants can’t provide precise, document-specific insights or track how information is used. Productivity soars when users can chat directly with their own documents, ask targeted questions, and get context-aware answers.
 
-## Architecture Overview 🏗️
+But to truly support enterprise needs, a system must do more: track conversations for compliance and continuity, let users reference specific documents, and provide visibility into how documents are accessed and used. This platform delivers those capabilities—enabling smarter, faster work with full traceability and control.
 
-The application follows a clean, modular design with well-defined service boundaries:
+## Solution
 
-```
-src/doc_intelligence/
-├── services/          # Core service layer
-│   ├── storage_service.py      # Databricks volume management
-│   ├── document_service.py     # Document processing orchestration
-│   ├── database_service.py     # PostgreSQL integration
-│   └── agent_service.py        # LLM + RAG capabilities
-├── workflows/         # Business logic orchestration
-│   ├── document_workflow.py    # End-to-end document processing
-│   └── conversation_workflow.py # Chat and conversation management
-├── database/          # Database schema and models
-│   └── schema.py              # SQLAlchemy models with pgvector support
-├── storage/           # Storage abstractions
-│   └── volume_storage.py      # Databricks volume operations
-├── agent/             # Agent and conversation management
-│   ├── conversation_manager.py # Chat state management
-│   ├── rag_workflow.py        # RAG pipeline implementation
-│   └── checkpointing.py       # Conversation persistence
-└── config.py          # Configuration management
-```
+Databricks is the ideal platform for document intelligence because it delivers everything needed—secure storage, scalable compute, LLM endpoints, and vector search—in one place. You can deploy the full solution as code, with integrated governance via Unity Catalog for access control and auditability. Databricks ensures high performance for document processing and chat, while keeping data secure and compliant from end to end.
 
-## Core Services 🔧
+This repository provides a complete solution with modular services for running a scalable and secure document intelligence solution.
 
-### **StorageService** 🗄️
-- Manages Databricks Unity Catalog volumes for document storage
-- Handles file upload/download operations
-- Provides volume path management and file operations
+## Application Flow
 
-### **DocumentService** 📄
-- Orchestrates document processing workflows
-- Manages document metadata and status tracking
-- Handles document chunking and processing state
+To use the applicaton users authenticate via the Databricks workspace client, establishing a session and verifying their database record. They can view or resume past conversations, or start new ones, with all chat history and context managed in the database.
 
-### **DatabaseService** 💾
-- PostgreSQL integration using the same connection pattern as your `ai_parse.ipynb`
-- Manages users, conversations, documents, and message history
-- Handles database schema creation and migrations
-- Uses dynamic credential generation via Databricks SDK
+Documents are uploaded to Unity Catalog volumes and processed asynchronously for chunking and embedding. Vector search retrieves relevant content for RAG (Retrieval Augmented Generation) with Databricks LLMs, and users can toggle between searching all documents or just those in the current session.
 
-### **AgentService** 🤖
-- Combines Databricks LLM capabilities with RAG
-- Manages conversation state using LangGraph
-- Provides vector search across document chunks
-- Handles embedding generation and similarity search
+## Services
 
-## Workflows 🔄
+This repository assembles a set of modular services that are needed to run a document intelligence solution:
 
-### **DocumentWorkflow**
-Coordinates the end-to-end document processing:
-1. **Upload**: Store document in Databricks volume
-2. **Process**: Queue AI parsing job
-3. **Chunk**: Split document into searchable chunks
-4. **Embed**: Generate vector embeddings
-5. **Store**: Save chunks and metadata to database
+1. Storage Service (Volumes)
+2. Database Service (Lakebase)
+3. Document Service (DBSQL)
+4. Agent Service (Serving)
 
-### **ConversationWorkflow**
-Manages intelligent conversations:
-1. **Context**: Retrieve relevant document chunks using vector search
-2. **Generate**: Use LLM to create contextual responses
-3. **Persist**: Save conversation history and state
-4. **Manage**: Handle conversation titles and metadata
+These four services are brought together by a front end that is delivered with Databricks Apps.
 
-## Configuration ⚙️
+### Stroage Service
 
-The application uses a centralized `config.yaml` file for all configuration:
+The Storage Service is responsible for managing document storage and retrieval.. It handles file upload/download operations, provides volume path management and file operations.
 
-```yaml
-# Databricks Configuration
-databricks:
-  host: "https://your-workspace.cloud.databricks.com"
-  token: "your-databricks-token"
+### Database Service
 
-# Database Configuration
-database:
-  instance_name: "shm"
-  host: "your-database-host.database.azuredatabricks.net"
-  port: 5432
-  database: "databricks_postgres"
-  user: "your-username"
+The Database Service is responsible for managing the PostgreSQL database for the document intelligence solution. It handles database schema creation and migrations, and provides dynamic credential generation via Databricks SDK. We use pgvector extension for vector similarity search on small batches of documents and Databricks Vector Search for an overall repository. See [data_model.md](data_model.md) for a detailed description of the database schema.
 
-# Agent Configuration
-agent:
-  embedding_endpoint: "databricks-gte-large"
-  llm:
-    endpoint: "databricks-claude-sonnet-4"
-    max_tokens: 512
-    temperature: 0.1
-```
+### Document Service
 
-**No environment variables needed** - everything is configured through the YAML file.
+The Document Service is responsible for orchestrating the document processing workflows. It manages document metadata and status tracking, and handles document chunking and processing state.
 
-## Quick Start 🚀
+### Agent Service
+
+The Agent Service is responsible for combining Databricks LLM capabilities with RAG. It manages conversation state using LangGraph, provides vector search across document chunks, and handles embedding generation and similarity search.
+
+
+## TODO
+
+- [ ] Write blog
+
+
+
+## Development
 
 ### 1. Setup
 
@@ -131,82 +79,30 @@ Edit `config.yaml` with your:
 uv run streamlit run app.py
 ```
 
-## Database Schema 🗃️
+## Development
 
-The application uses PostgreSQL with pgvector extension:
-
-- **Users**: User management with Databricks user ID mapping
-- **Documents**: Document metadata and processing status
-- **Document Chunks**: Text chunks with vector embeddings
-- **Conversations**: Chat sessions and thread management
-- **Messages**: Individual chat messages with metadata
-
-## Key Design Principles 🎯
-
-### **Modularity**
-- Each service has a single, well-defined responsibility
-- Services communicate through clean interfaces
-- Easy to test and maintain individual components
-
-### **Graceful Degradation**
-- App remains functional even when external services are unavailable
-- Automatic fallbacks for missing capabilities
-- Clear status reporting for service availability
-
-### **Databricks Integration**
-- Uses Databricks SDK for authentication and database access
-- Dynamic credential generation for database connections
-- Unity Catalog volume management for document storage
-
-### **Vector Search**
-- pgvector integration for semantic document search
-- Automatic chunking and embedding generation
-- Efficient similarity search across document database
-
-## Development 🛠️
-
-### Project Structure
-```
-doc-intelligence-app/
-├── src/doc_intelligence/     # Main application code
-├── app.py                    # Streamlit application entry point
-├── config.yaml              # Configuration file
-├── pyproject.toml           # Project dependencies
-└── tests/                   # Test suite
-```
+This application uses uv for package management and is designed to work with Serverless v3 on Databricks. We use pytest for testing.
 
 ### Running Tests
 ```bash
 uv run pytest
 ```
 
-### Code Quality
-```bash
-uv run black src/ app.py
-uv run isort src/ app.py
-uv run mypy src/ app.py
-```
+### Troubleshooting FAQ
 
-## Troubleshooting 🔧
+**Q: I'm getting database connection errors. What should I check?**  
+A:  
+First, verify that the database instance name in your configuration is correct. Next, check that your Databricks workspace permissions are properly set. Finally, ensure that the database instance is accessible from your environment.
 
-### Common Issues
+**Q: Why am I seeing errors with LLM or embedding endpoints?**  
+A:  
+Begin by confirming that the endpoint names in your configuration are correct. Then, check the status of the endpoints in Databricks. Also, make sure you have set up proper authentication.
 
-**Database Connection Errors**
-- Verify database instance name in config
-- Check Databricks workspace permissions
-- Ensure database instance is accessible
+**Q: Document processing isn't working. What could be wrong?**  
+A:  
+Check that you have the correct permissions for the storage volume. Then, verify that the job cluster configuration is correct. Finally, monitor the execution of the processing notebook for any errors or failures.
 
-**LLM/Embedding Errors**
-- Verify endpoint names in config
-- Check endpoint status in Databricks
-- Ensure proper authentication
-
-**Document Processing Issues**
-- Check volume permissions
-- Verify job cluster configuration
-- Monitor processing notebook execution
-
-## Contributing 🤝
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -214,6 +110,6 @@ uv run mypy src/ app.py
 4. Add tests for new functionality
 5. Submit a pull request
 
-## License 📄
+## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.

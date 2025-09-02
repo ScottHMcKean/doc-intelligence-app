@@ -151,13 +151,35 @@ class AgentService:
                 logger.warning("No embeddings available for vector store")
                 return
 
+            # Create a collection first to ensure proper table structure
+            # We'll use a simple collection name that PGVector can manage
+            collection_name = "doc_intel_chunks"
+
             self.vectorstore = PGVector(
                 embeddings=self.embeddings,  # First positional parameter
                 connection=connection_string,
-                collection_name="document_chunks",
+                collection_name=collection_name,
                 pre_delete_collection=False,
             )
-            logger.info("Successfully connected to existing PGVector store")
+
+            # Test the connection by trying to get collection info
+            try:
+                # This will create the collection if it doesn't exist
+                collection = self.vectorstore.get_collection()
+                logger.info(
+                    f"Successfully connected to PGVector collection: {collection_name}"
+                )
+            except Exception as collection_error:
+                logger.warning(f"Collection initialization issue: {collection_error}")
+                # Try to create the collection manually
+                try:
+                    self.vectorstore.create_collection()
+                    logger.info(f"Created new PGVector collection: {collection_name}")
+                except Exception as create_error:
+                    logger.error(f"Failed to create collection: {create_error}")
+                    self.vectorstore = None
+                    return
+
         except Exception as e:
             logger.error(f"Failed to connect to PGVector store: {e}")
             self.vectorstore = None
@@ -220,7 +242,8 @@ class AgentService:
     @property
     def rag_available(self) -> bool:
         """Check if RAG capabilities are available."""
-        return self.vectorstore is not None and self.embeddings is not None
+        # We now use custom vector search, so we only need embeddings
+        return self.embeddings is not None
 
     @property
     def conversation_state_available(self) -> bool:
@@ -261,27 +284,18 @@ class AgentService:
             if not embed_success:
                 return False, [], f"Failed to generate query embedding: {embed_message}"
 
-            # Search against existing vectors in the database
+            # Search against existing vectors in the database using our custom method
             try:
-                # Use PGVector similarity search
-                results = self.vectorstore.similarity_search_by_vector(
-                    query_embedding, k=limit
+                # Use our database service for vector search instead of PGVector
+                # This gives us more control over the query and schema
+                search_results = self._perform_custom_vector_search(
+                    query_embedding, limit, document_ids
                 )
 
-                # Format results
-                formatted_results = []
-                for chunk in results:
-                    formatted_results.append(
-                        {
-                            "content": chunk.page_content,
-                            "metadata": chunk.metadata or {},
-                            "score": None,  # PGVector similarity score if available
-                            "document_id": str(chunk.metadata.get("document_id")),
-                            "chunk_index": chunk.metadata.get("chunk_index"),
-                        }
-                    )
-
-                return True, formatted_results, "Vector search completed successfully"
+                if search_results:
+                    return True, search_results, "Vector search completed successfully"
+                else:
+                    return False, [], "No results found"
 
             except Exception as e:
                 logger.error(f"Vector search failed: {str(e)}")
@@ -290,6 +304,143 @@ class AgentService:
         except Exception as e:
             logger.error(f"Failed to perform similarity search: {e}")
             return False, [], f"Search failed: {str(e)}"
+
+    def _perform_custom_vector_search(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Perform vector search using our custom database schema."""
+        try:
+            # Get database connection string
+            connection_string = self._get_database_connection_string()
+            if not connection_string:
+                logger.error("No database connection string available")
+                return []
+
+            # Import psycopg2 for direct database access
+            import psycopg2
+            import psycopg2.extras
+
+            # Connect to database and perform vector search
+            with psycopg2.connect(connection_string) as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                    # Build the query based on whether we're filtering by document IDs
+                    if document_ids:
+                        query = """
+                            SELECT dc.id, dc.content, dc.chunk_metadata, dc.token_count,
+                                   d.filename, d.doc_metadata, d.doc_hash,
+                                   dc.embedding <-> %s as distance
+                            FROM document_chunks dc
+                            JOIN documents d ON dc.document_id = d.id
+                            WHERE d.doc_hash = ANY(%s)
+                            ORDER BY distance
+                            LIMIT %s
+                        """
+                        cur.execute(query, (query_embedding, document_ids, limit))
+                    else:
+                        query = """
+                            SELECT dc.id, dc.content, dc.chunk_metadata, dc.token_count,
+                                   d.filename, d.doc_metadata, d.doc_hash,
+                                   dc.embedding <-> %s as distance
+                            FROM document_chunks dc
+                            JOIN documents d ON dc.document_id = d.id
+                            ORDER BY distance
+                            LIMIT %s
+                        """
+                        cur.execute(query, (query_embedding, limit))
+
+                    results = cur.fetchall()
+
+                    # Format results to match expected structure
+                    formatted_results = []
+                    for row in results:
+                        formatted_results.append(
+                            {
+                                "content": row["content"],
+                                "metadata": {
+                                    "document_id": row["doc_hash"],
+                                    "filename": row["filename"],
+                                    "chunk_index": row.get("chunk_metadata", {}).get(
+                                        "chunk_index"
+                                    ),
+                                    "token_count": row["token_count"],
+                                    "distance": (
+                                        float(row["distance"])
+                                        if row["distance"] is not None
+                                        else None
+                                    ),
+                                },
+                                "score": (
+                                    1.0 - float(row["distance"])
+                                    if row["distance"] is not None
+                                    else None
+                                ),
+                                "document_id": row["doc_hash"],
+                                "chunk_index": row.get("chunk_metadata", {}).get(
+                                    "chunk_index"
+                                ),
+                            }
+                        )
+
+                    return formatted_results
+
+        except Exception as e:
+            logger.error(f"Custom vector search failed: {str(e)}")
+            return []
+
+    def add_document_chunks_to_vectorstore(
+        self, document_id: str, chunks: List[Dict[str, Any]]
+    ) -> bool:
+        """Add document chunks with embeddings to the vector store."""
+        try:
+            # Get database connection string
+            connection_string = self._get_database_connection_string()
+            if not connection_string:
+                logger.error("No database connection string available")
+                return False
+
+            # Import psycopg2 for direct database access
+            import psycopg2
+            import psycopg2.extras
+            import uuid
+            from datetime import datetime, timezone
+
+            # Connect to database and add chunks
+            with psycopg2.connect(connection_string) as conn:
+                with conn.cursor() as cur:
+                    for i, chunk_data in enumerate(chunks):
+                        chunk_id = str(uuid.uuid4())
+                        now = datetime.now(timezone.utc)
+
+                        # Insert chunk with embedding
+                        cur.execute(
+                            """INSERT INTO document_chunks 
+                               (id, document_id, chunk_index, content, embedding, 
+                                chunk_metadata, token_count, created_at) 
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                            (
+                                chunk_id,
+                                document_id,
+                                i,
+                                chunk_data["content"],
+                                chunk_data.get("embedding"),
+                                psycopg2.extras.Json(chunk_data.get("metadata", {})),
+                                chunk_data.get("token_count"),
+                                now,
+                            ),
+                        )
+
+                    conn.commit()
+                    logger.info(
+                        f"Added {len(chunks)} chunks to vector store for document {document_id}"
+                    )
+                    return True
+
+        except Exception as e:
+            logger.error(f"Failed to add document chunks to vector store: {str(e)}")
+            return False
 
     # ===== Chat Interface =====
 
@@ -543,6 +694,57 @@ class AgentService:
 
         logger.info(f"Found {len(results)} documents for query: {query}")
         return True, results, metadata
+
+    # ===== Conversation Management =====
+
+    def summarize_conversation(
+        self, messages: List[Dict[str, str]]
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Summarize a conversation and suggest a title."""
+        if not self.llm:
+            return False, "LLM not available", None
+
+        try:
+            # Build a prompt for conversation summarization
+            prompt = "Please analyze this conversation and provide:\n"
+            prompt += "1. A brief summary (2-3 sentences)\n"
+            prompt += "2. A short, descriptive title (max 50 characters)\n\n"
+            prompt += "Conversation:\n"
+
+            for message in messages[-5:]:  # Last 5 messages for context
+                role = message["role"]
+                content = message["content"][:200]  # Limit content length
+                prompt += f"{role.title()}: {content}\n"
+
+            prompt += (
+                "\nPlease format your response as:\nSummary: [summary]\nTitle: [title]"
+            )
+
+            # Generate response
+            response = self.llm.invoke(prompt)
+            response_text = (
+                response.content if hasattr(response, "content") else str(response)
+            )
+
+            # Parse response to extract summary and title
+            summary = ""
+            title = None
+
+            lines = response_text.split("\n")
+            for line in lines:
+                if line.startswith("Summary:"):
+                    summary = line.replace("Summary:", "").strip()
+                elif line.startswith("Title:"):
+                    title = line.replace("Title:", "").strip()
+
+            if not title:
+                title = "New Conversation"
+
+            return True, summary, title
+
+        except Exception as e:
+            logger.error(f"Failed to summarize conversation: {e}")
+            return False, f"Failed to summarize: {str(e)}", None
 
     # ===== Service Status =====
 

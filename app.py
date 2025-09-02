@@ -3,7 +3,7 @@
 import streamlit as st
 from typing import Optional
 
-from src.doc_intelligence.app import DocumentIntelligenceApp
+from src.doc_intel.app import DocumentIntelligenceApp
 
 # Page configuration
 st.set_page_config(
@@ -131,6 +131,16 @@ def main():
         st.session_state.chat_messages = []
         st.session_state.app_initialized = True
 
+    # Verify user authentication
+    if "user_authenticated" not in st.session_state:
+        st.session_state.user_authenticated = app.verify_user_authentication()
+
+    if not st.session_state.user_authenticated:
+        st.error(
+            "❌ Authentication failed. Please check your Databricks connection and try again."
+        )
+        st.stop()
+
     # Render sidebar
     render_sidebar(app)
 
@@ -150,9 +160,15 @@ def render_sidebar(app: DocumentIntelligenceApp):
         st.image(logo_path, use_container_width=True)
         st.title("Document Intelligence")
 
-        # Welcome message
-        current_user = app.get_current_user()
-        st.text(f"Welcome, {current_user}")
+        # Welcome message and authentication status
+        username, _ = app.get_current_user()
+        st.text(f"Welcome, {username}")
+
+        # Authentication status
+        if st.session_state.get("user_authenticated"):
+            st.success("✅ Authenticated")
+        else:
+            st.error("❌ Not Authenticated")
 
         # Main Services Status
         with st.expander("Service Status", expanded=False):
@@ -225,14 +241,30 @@ def render_chat_interface(app: DocumentIntelligenceApp):
             if st.button("Process Document", type="primary"):
                 handle_document_upload(app, uploaded_file)
 
-    # Current context display
+    # Current context display and search toggle
     if st.session_state.current_document_list:
         with st.container():
-            st.markdown("**Current Context:**")
-            for doc_hash in st.session_state.current_document_list:
-                doc_info = app.get_document_info(doc_hash)
-                if doc_info:
-                    st.markdown(f"📄 {doc_info['filename']} ({doc_info['status']})")
+            col1, col2 = st.columns([3, 1])
+
+            with col1:
+                st.markdown("**Current Context:**")
+                for doc_hash in st.session_state.current_document_list:
+                    doc_info = app.get_document_info(doc_hash)
+                    if doc_info:
+                        st.markdown(f"📄 {doc_info['filename']} ({doc_info['status']})")
+
+            with col2:
+                # Search context toggle
+                search_context = st.selectbox(
+                    "Search Context",
+                    options=["Session Documents", "All Documents"],
+                    index=0,
+                    help="Choose whether to search only current session documents or all your documents",
+                )
+                st.session_state.search_context = search_context
+    else:
+        # Default to all documents when no session documents
+        st.session_state.search_context = "All Documents"
 
     # Chat interface
     chat_container = st.container()
@@ -279,23 +311,20 @@ def load_conversation(app: DocumentIntelligenceApp, conversation_id: str):
         # Get conversation history
         messages = app.get_conversation_history(conversation_id)
 
-        # Get conversation details to find associated documents
-        conversations = app.get_user_conversations()
-        current_conv = None
-        for conv in conversations:
-            if conv["conversation_id"] == conversation_id:
-                current_conv = conv
-                break
+        # Get conversation details with associated documents
+        conversation_info = app.get_conversation_info(conversation_id)
 
-        if current_conv:
+        if conversation_info:
             st.session_state.current_conversation_id = conversation_id
-            st.session_state.current_document_list = current_conv.get(
-                "document_hashes", []
+            st.session_state.current_document_list = conversation_info.get(
+                "document_ids", []
             )
             st.session_state.chat_messages = [
                 {"role": msg["role"], "content": msg["content"]} for msg in messages
             ]
             st.rerun()
+        else:
+            st.error("Conversation not found")
 
     except Exception as e:
         st.error(f"Error loading conversation: {str(e)}")
@@ -366,7 +395,18 @@ def generate_response(app: DocumentIntelligenceApp, user_message: str) -> str:
             else:
                 return "Sorry, I couldn't start a new conversation. Please try again."
 
-        # Send message
+        # Determine search context based on user preference
+        search_context = st.session_state.get("search_context", "All Documents")
+
+        # If user wants to search all documents, pass None to allow searching across all user documents
+        # If user wants to search only session documents, pass the current document list
+        document_hashes = (
+            None
+            if search_context == "All Documents"
+            else st.session_state.current_document_list
+        )
+
+        # Send message with appropriate document context
         result = app.send_chat_message(
             conversation_id=st.session_state.current_conversation_id,
             user_message=user_message,

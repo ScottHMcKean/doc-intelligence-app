@@ -8,15 +8,20 @@ from databricks.sdk.core import Config
 logger = logging.getLogger(__name__)
 
 
-def create_workspace_client(
+def get_workspace_client(
     host: Optional[str] = None, token: Optional[str] = None
 ) -> Optional[WorkspaceClient]:
     """
-    Create a Databricks WorkspaceClient with graceful degradation.
+    Get authenticated Databricks workspace client with graceful error handling.
+
+    This function combines the functionality of both create_workspace_client and
+    get_databricks_client into a single, unified interface.
 
     Args:
-        host: Databricks workspace host
-        token: Databricks access token
+        host: Optional Databricks workspace host. If not provided, will try to
+              get from environment or Databricks CLI configuration.
+        token: Optional Databricks access token. If not provided, will try to
+               get from environment or Databricks CLI configuration.
 
     Returns:
         WorkspaceClient or None if creation fails
@@ -45,52 +50,37 @@ def create_workspace_client(
         return None
 
 
-def get_databricks_client() -> Optional[WorkspaceClient]:
+def get_current_user(client: Optional[WorkspaceClient] = None) -> Tuple[str, str]:
     """
-    Get authenticated Databricks workspace client with graceful error handling.
-    This is a simplified version that doesn't require Streamlit.
-    """
-    try:
-        # Try to get configuration from environment or Databricks CLI
-        sdk_config = Config()
-
-        if not sdk_config.host:
-            logger.warning("Databricks host not configured")
-            return None
-
-        client = WorkspaceClient(config=sdk_config)
-        # Test the connection
-        client.current_user.me()
-        logger.info("Successfully connected to Databricks")
-        return client
-
-    except Exception as e:
-        logger.error(f"Failed to create Databricks client: {str(e)}")
-        return None
-
-
-def get_current_user(client: Optional[WorkspaceClient] = None) -> str:
-    """
-    Get the current authenticated user's username with fallback.
+    Get the current authenticated user's username and user id.
 
     Args:
-        client: Optional WorkspaceClient to use
+        client: WorkspaceClient to use
 
     Returns:
-        Username string
+        Tuple of (username, user_id)
+
+    Raises:
+        ValueError: If client is not provided or user cannot be retrieved.
     """
+    if not client:
+        logger.error("No Databricks client provided to get_current_user")
+        raise ValueError("Databricks client must be provided to get current user.")
+
     try:
-        if client:
-            current_user = client.current_user.me()
-            username = current_user.user_name or "unknown_user"
-            logger.info(f"Retrieved current user: {username}")
-            return username
-        else:
-            logger.warning("No Databricks client available, using fallback user")
-            return "demo_user@example.com"
+        current_user = client.current_user.me()
+        username = current_user.user_name
+        user_id = current_user.id
+        if not username or not user_id:
+            logger.error("User information is incomplete: username or user_id missing.")
+            raise ValueError(
+                "Could not retrieve username or user_id from Databricks client."
+            )
+        logger.info(f"Retrieved current user: {username} (id: {user_id})")
+        return username, user_id
     except Exception as e:
         logger.error(f"Failed to get current user: {str(e)}")
-        return "demo_user@example.com"
+        raise
 
 
 def validate_databricks_connection(
@@ -106,7 +96,7 @@ def validate_databricks_connection(
         Tuple of (is_valid, message)
     """
     if not client:
-        return False, "No Databricks client available"
+        return False, "No Workspace client provided"
 
     try:
         client.current_user.me()
