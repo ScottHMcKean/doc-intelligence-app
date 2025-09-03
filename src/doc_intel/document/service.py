@@ -4,6 +4,10 @@ import logging
 from typing import Optional, Dict, Any, Tuple
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import NotebookTask, JobSettings, Task
+from databricks.sdk.service.workspace import ImportFormat, Language
+
+from doc_intel.config import check_config
+from doc_intel.utils import check_workspace_client
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +17,16 @@ class DocumentService:
 
     def __init__(self, client: Optional[WorkspaceClient], config: dict):
         self.client = client
+        check_workspace_client(client)
+        self.user_id = self.client.current_user.me().id
+
         self.config = config
-        self.timeout_minutes = config.get("timeout_minutes", 30)
-        self.max_retries = config.get("max_retries", 3)
-        self.auto_process = config.get("auto_process", True)
-        self.generate_summary = config.get("generate_summary", True)
+        check_config(config)
+
+        self.timeout_minutes = config.document.get("timeout_minutes", 30)
+        self.max_retries = config.document.get("max_retries", 3)
+        self.auto_process = config.document.get("auto_process", True)
+        self.generate_summary = config.document.get("generate_summary", True)
 
     def queue_document_processing(
         self,
@@ -34,24 +43,16 @@ class DocumentService:
             Tuple of (success, run_id, message)
         """
         # Use configured job ID if available
-        agent_job_id = self.config.get("job_id")
+        agent_job_id = self.config.document.get("job_id")
         if agent_job_id:
             return self._queue_existing_job(input_path, output_path, doc_hash)
 
-        notebook_path = notebook_path or self.config.get(
+        notebook_path = notebook_path or self.config.document.get(
             "processing_notebook_path", "/Workspace/notebooks/document_processing"
         )
         job_cluster_key = job_cluster_key or self.config.get(
             "default_cluster_key", "default_cluster"
         )
-
-        # Check if client is available
-        if not self.client:
-            logger.warning("No Databricks client available for job queue")
-            import random
-
-            run_id = random.randint(10000, 99999)
-            return True, run_id, f"Simulated processing job queued. Run ID: {run_id}"
 
         try:
             # Define the notebook task with parameters
@@ -117,9 +118,6 @@ class DocumentService:
         self, input_path: str, output_path: str, doc_hash: str
     ) -> Tuple[bool, Optional[int], str]:
         """Queue processing using an existing Databricks job."""
-        if not self.client:
-            return False, None, "Databricks client not available"
-
         try:
             job_id = int(self.config.get("job_id"))
             logger.info(f"Using existing job {job_id} for document processing")
@@ -157,23 +155,6 @@ class DocumentService:
         Returns:
             Tuple of (success, status_info, message)
         """
-        # Check if client is available
-        if not self.client:
-            logger.warning("No Databricks client available for job status check")
-            return (
-                True,
-                {
-                    "run_id": run_id,
-                    "state": "TERMINATED",
-                    "result_state": "SUCCESS",
-                    "start_time": None,
-                    "end_time": None,
-                    "run_page_url": None,
-                    "simulated": True,
-                },
-                "Simulated job status (Databricks not connected)",
-            )
-
         try:
             run_info = self.client.jobs.get_run(run_id)
 
@@ -209,9 +190,6 @@ class DocumentService:
         Returns:
             Tuple of (success, message)
         """
-        if not self.client:
-            return False, "Databricks client not available"
-
         try:
             self.client.jobs.cancel_run(run_id)
             logger.info(f"Successfully cancelled job {run_id}")
@@ -219,3 +197,59 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Failed to cancel job {run_id}: {str(e)}")
             return False, f"Failed to cancel job: {str(e)}"
+
+    def deploy_notebook_to_workspace(
+        self, local_notebook_path: str, workspace_path: str, create_job: bool = False
+    ) -> Tuple[bool, Optional[int], str]:
+        """
+        Deploy a notebook to Databricks workspace.
+
+        Args:
+            local_notebook_path: Path to the local .py file
+            workspace_path: Target path in Databricks workspace (e.g., "/Workspace/Shared/my_notebook")
+            create_job: Whether to create a job for the notebook
+
+        Returns:
+            Tuple of (success, job_id, message)
+        """
+        try:
+            # Read the notebook content
+            with open(local_notebook_path, "r") as f:
+                content = f.read()
+
+            # Upload the notebook to workspace
+            self.client.workspace.import_(
+                path=workspace_path,
+                content=content,
+                format=ImportFormat.SOURCE,
+                language=Language.PYTHON,
+                overwrite=True,
+            )
+
+            logger.info(f"Successfully deployed notebook to {workspace_path}")
+
+            job_id = None
+            if create_job:
+                # Create a job for the notebook
+                job_settings = JobSettings(
+                    name=f"Notebook Job - {workspace_path.split('/')[-1]}",
+                    tasks=[
+                        Task(
+                            task_key="run_notebook",
+                            notebook_task=NotebookTask(
+                                notebook_path=workspace_path, base_parameters={}
+                            ),
+                        )
+                    ],
+                    timeout_seconds=3600,  # 1 hour timeout
+                )
+
+                job_response = self.client.jobs.create(job_settings)
+                job_id = job_response.job_id
+                logger.info(f"Created job {job_id} for notebook {workspace_path}")
+
+            return True, job_id, f"Notebook deployed to {workspace_path}"
+
+        except Exception as e:
+            logger.error(f"Failed to deploy notebook: {str(e)}")
+            return False, None, f"Failed to deploy notebook: {str(e)}"

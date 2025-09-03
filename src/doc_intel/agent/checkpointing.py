@@ -43,12 +43,6 @@ def create_checkpointer(
     Returns:
         Checkpointer instance or None if creation fails
     """
-    if config is None:
-        # Backwards compatibility - import global config if none provided
-        from ..config import DocConfig
-
-        config = DocConfig("./config.yaml")
-
     effective_type = checkpointer_type or config.get(
         "agent.conversation.checkpointer_type", "auto"
     )

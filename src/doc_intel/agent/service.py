@@ -60,9 +60,6 @@ class AgentService:
 
     def _get_database_connection_string(self) -> Optional[str]:
         """Get database connection string using the same pattern as database service."""
-        if not self.client:
-            return None
-
         try:
             # Get database instance name from config
             instance_name = self.config.get("database.instance_name")
@@ -135,10 +132,6 @@ class AgentService:
 
     def _initialize_vectorstore(self):
         """Initialize PGVector store - already exists in managed Databricks PostgreSQL."""
-        if not self.client:
-            logger.warning("Vector store not available - missing client")
-            return
-
         try:
             connection_string = self._get_database_connection_string()
             if not connection_string:
@@ -186,10 +179,6 @@ class AgentService:
 
     def _initialize_checkpointer(self):
         """Initialize checkpointer for conversation state."""
-        if not self.client:
-            logger.warning("Checkpointer not available - missing client")
-            return
-
         try:
             connection_string = self._get_database_connection_string()
             if not connection_string:
@@ -272,10 +261,6 @@ class AgentService:
         self, query: str, limit: int = 5, document_ids: Optional[List[str]] = None
     ) -> Tuple[bool, List[Dict[str, Any]], str]:
         """Perform similarity search against existing database vectors."""
-        if not self.embeddings or not self.client:
-            logger.warning("Vector search not available - missing embeddings or client")
-            return False, [], "Vector search not available"
-
         try:
             # Generate embedding for the user query
             embed_success, query_embedding, embed_message = (

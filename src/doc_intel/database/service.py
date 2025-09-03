@@ -9,6 +9,11 @@ from contextlib import contextmanager
 from databricks.sdk import WorkspaceClient
 from datetime import datetime, timezone
 
+# SQLAlchemy imports for schema-based operations
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from .schema import Base, User, Document, DocumentChunk, Conversation, Message
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,11 +27,6 @@ class DatabaseService:
     @contextmanager
     def get_connection(self):
         """Get a database connection using the simple psycopg2 pattern."""
-        if not self.client:
-            logger.warning("No Databricks client available for database connection")
-            yield None
-            return
-
         try:
             # Get database instance name from config
             instance_name = self.config.get("database.instance_name")
@@ -64,9 +64,6 @@ class DatabaseService:
 
     def test_connection(self) -> Tuple[bool, str]:
         """Test database connection."""
-        if not self.client:
-            return False, "Database not configured"
-
         try:
             with self.get_connection() as conn:
                 if conn:
@@ -81,9 +78,6 @@ class DatabaseService:
 
     def create_tables(self) -> bool:
         """Create basic database tables if they don't exist."""
-        if not self.client:
-            return False
-
         try:
             with self.get_connection() as conn:
                 if not conn:
@@ -259,8 +253,6 @@ class DatabaseService:
         Returns:
             Processed results if found, None otherwise
         """
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -313,8 +305,6 @@ class DatabaseService:
         self, file_path: str, user_id: int
     ) -> Optional[Dict[str, Any]]:
         """Get document by file path and user ID."""
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -348,8 +338,6 @@ class DatabaseService:
         Returns:
             Optional[Dict[str, Any]]: The user record as a dict, or None if creation failed.
         """
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -397,8 +385,6 @@ class DatabaseService:
 
     def user_exists(self, username: str) -> bool:
         """Check if a user exists in the database."""
-        if not self.client:
-            return False
 
         try:
             with self.get_connection() as conn:
@@ -420,8 +406,6 @@ class DatabaseService:
         self, username: str, databricks_user_id: int
     ) -> bool:
         """Verify that a user is authenticated and exists in the database."""
-        if not self.client:
-            return False
 
         try:
             with self.get_connection() as conn:
@@ -450,8 +434,6 @@ class DatabaseService:
         document_ids: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Create a new conversation."""
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -486,8 +468,6 @@ class DatabaseService:
 
     def get_user_conversations(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all conversations for a user."""
-        if not self.client:
-            return []
 
         try:
             with self.get_connection() as conn:
@@ -508,8 +488,6 @@ class DatabaseService:
 
     def update_conversation_title(self, conversation_id: str, title: str) -> bool:
         """Update conversation title."""
-        if not self.client:
-            return False
 
         try:
             with self.get_connection() as conn:
@@ -534,8 +512,6 @@ class DatabaseService:
 
     def delete_conversation(self, conversation_id: str) -> bool:
         """Delete a conversation."""
-        if not self.client:
-            return False
 
         try:
             with self.get_connection() as conn:
@@ -567,8 +543,6 @@ class DatabaseService:
         metadata: Optional[Dict] = None,
     ) -> Optional[Dict[str, Any]]:
         """Add a message to a conversation."""
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -600,8 +574,6 @@ class DatabaseService:
 
     def get_conversation_messages(self, conversation_id: str) -> List[Dict[str, Any]]:
         """Get all messages for a conversation."""
-        if not self.client:
-            return []
 
         try:
             with self.get_connection() as conn:
@@ -631,8 +603,6 @@ class DatabaseService:
         status: str = "uploaded",
     ) -> Optional[Dict[str, Any]]:
         """Create a new document record."""
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -660,8 +630,6 @@ class DatabaseService:
         self, document_id: str, status: str, error: Optional[str] = None
     ) -> bool:
         """Update document status."""
-        if not self.client:
-            return False
 
         try:
             with self.get_connection() as conn:
@@ -698,8 +666,6 @@ class DatabaseService:
 
     def get_document_by_hash(self, doc_hash: str) -> Optional[Dict[str, Any]]:
         """Get document by hash."""
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -718,8 +684,6 @@ class DatabaseService:
 
     def get_user_documents(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all documents for a user."""
-        if not self.client:
-            return []
 
         try:
             with self.get_connection() as conn:
@@ -740,8 +704,6 @@ class DatabaseService:
 
     def get_user_documents_by_username(self, username: str) -> List[Dict[str, Any]]:
         """Get all documents for a user by username."""
-        if not self.client:
-            return []
 
         try:
             with self.get_connection() as conn:
@@ -776,8 +738,6 @@ class DatabaseService:
         self, document_id: str, chunks: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """Store document chunks with embeddings."""
-        if not self.client:
-            return []
 
         try:
             with self.get_connection() as conn:
@@ -819,8 +779,6 @@ class DatabaseService:
 
     def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
         """Get all chunks for a document."""
-        if not self.client:
-            return []
 
         try:
             with self.get_connection() as conn:
@@ -846,8 +804,6 @@ class DatabaseService:
         document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Perform vector similarity search."""
-        if not self.client:
-            return []
 
         try:
             with self.get_connection() as conn:
@@ -885,8 +841,6 @@ class DatabaseService:
         self, conversation_id: str, document_hashes: List[str]
     ) -> bool:
         """Add documents to an existing conversation."""
-        if not self.client:
-            return False
 
         try:
             with self.get_connection() as conn:
@@ -936,8 +890,6 @@ class DatabaseService:
 
     def get_conversation_by_id(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """Get conversation by ID."""
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -959,8 +911,6 @@ class DatabaseService:
         self, conversation_id: str
     ) -> Optional[Dict[str, Any]]:
         """Get conversation by ID with associated document information."""
-        if not self.client:
-            return None
 
         try:
             with self.get_connection() as conn:
@@ -987,3 +937,178 @@ class DatabaseService:
                 f"Failed to get conversation {conversation_id} with documents: {str(e)}"
             )
             return None
+
+
+# ===== SQLAlchemy-based Database Utilities =====
+
+
+def create_database_engine(connection_string: str, echo: bool = False):
+    """Create SQLAlchemy engine with proper configuration."""
+    engine = create_engine(
+        connection_string,
+        echo=echo,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+    return engine
+
+
+def create_tables(engine):
+    """Create all tables and extensions."""
+
+    # Create pgvector extension
+    with engine.connect() as conn:
+        try:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            conn.commit()
+            logger.info("pgvector extension created/verified")
+        except Exception as e:
+            logger.warning(f"Could not create pgvector extension: {e}")
+
+    # Create all tables
+    Base.metadata.create_all(engine)
+    logger.info("Database tables created successfully")
+
+
+def get_session_factory(connection_string: str):
+    """Get a session factory for database operations."""
+    engine = create_database_engine(connection_string)
+    create_tables(engine)
+    return sessionmaker(bind=engine)
+
+
+class DatabaseManager:
+    """Enhanced database manager with vector search capabilities using SQLAlchemy."""
+
+    def __init__(self, connection_string: str):
+        self.connection_string = connection_string
+        self.engine = create_database_engine(connection_string)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+
+        # Initialize database
+        create_tables(self.engine)
+
+    def get_session(self):
+        """Get a database session."""
+        return self.SessionLocal()
+
+    def create_user(self, username: str, email: Optional[str] = None) -> User:
+        """Create or get a user."""
+        with self.get_session() as session:
+            user = session.query(User).filter(User.username == username).first()
+            if not user:
+                user = User(username=username, email=email)
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+            return user
+
+    def create_document(
+        self, user_id: str, doc_hash: str, filename: str, **kwargs
+    ) -> Document:
+        """Create a new document record."""
+        with self.get_session() as session:
+            document = Document(
+                user_id=user_id, doc_hash=doc_hash, filename=filename, **kwargs
+            )
+            session.add(document)
+            session.commit()
+            session.refresh(document)
+            return document
+
+    def create_conversation(
+        self,
+        user_id: str,
+        title: str,
+        thread_id: str,
+        document_ids: Optional[List[str]] = None,
+    ) -> Conversation:
+        """Create a new conversation."""
+        with self.get_session() as session:
+            conversation = Conversation(
+                user_id=user_id,
+                title=title,
+                thread_id=thread_id,
+                document_ids=document_ids or [],
+            )
+            session.add(conversation)
+            session.commit()
+            session.refresh(conversation)
+            return conversation
+
+    def store_document_chunks(
+        self, document_id: str, chunks: List[Dict[str, Any]]
+    ) -> List[DocumentChunk]:
+        """Store document chunks with embeddings."""
+        with self.get_session() as session:
+            chunk_objects = []
+            for i, chunk_data in enumerate(chunks):
+                chunk = DocumentChunk(
+                    document_id=document_id,
+                    chunk_index=i,
+                    content=chunk_data["content"],
+                    embedding=chunk_data.get("embedding"),
+                    chunk_metadata=chunk_data.get("metadata", {}),
+                    token_count=chunk_data.get("token_count"),
+                )
+                chunk_objects.append(chunk)
+                session.add(chunk)
+
+            session.commit()
+            for chunk in chunk_objects:
+                session.refresh(chunk)
+            return chunk_objects
+
+    def vector_search(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        document_ids: Optional[List[str]] = None,
+    ) -> List[DocumentChunk]:
+        """Perform vector similarity search."""
+        with self.get_session() as session:
+            query = session.query(DocumentChunk)
+
+            if document_ids:
+                query = query.filter(DocumentChunk.document_id.in_(document_ids))
+
+            results = (
+                query.order_by(DocumentChunk.embedding.cosine_distance(query_embedding))
+                .limit(limit)
+                .all()
+            )
+
+            return results
+
+    def get_conversation_messages(self, conversation_id: str) -> List[Message]:
+        """Get all messages for a conversation."""
+        with self.get_session() as session:
+            messages = (
+                session.query(Message)
+                .filter(Message.conversation_id == conversation_id)
+                .order_by(Message.created_at)
+                .all()
+            )
+            return messages
+
+    def add_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        metadata: Optional[Dict] = None,
+    ) -> Message:
+        """Add a message to a conversation."""
+        with self.get_session() as session:
+            message = Message(
+                conversation_id=conversation_id,
+                role=role,
+                content=content,
+                msg_metadata=metadata or {},
+            )
+            session.add(message)
+            session.commit()
+            session.refresh(message)
+            return message

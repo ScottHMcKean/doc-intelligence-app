@@ -50,6 +50,18 @@ def get_workspace_client(
         return None
 
 
+def check_workspace_client(client: WorkspaceClient) -> bool:
+    """
+    Check if the workspace client is valid.
+    """
+    assert isinstance(client, WorkspaceClient)
+    try:
+        client.current_user.me()
+        return True
+    except Exception as e:
+        return False
+
+
 def get_current_user(client: Optional[WorkspaceClient] = None) -> Tuple[str, str]:
     """
     Get the current authenticated user's username and user id.
@@ -63,10 +75,6 @@ def get_current_user(client: Optional[WorkspaceClient] = None) -> Tuple[str, str
     Raises:
         ValueError: If client is not provided or user cannot be retrieved.
     """
-    if not client:
-        logger.error("No Databricks client provided to get_current_user")
-        raise ValueError("Databricks client must be provided to get current user.")
-
     try:
         current_user = client.current_user.me()
         username = current_user.user_name
@@ -95,9 +103,6 @@ def validate_databricks_connection(
     Returns:
         Tuple of (is_valid, message)
     """
-    if not client:
-        return False, "No Workspace client provided"
-
     try:
         client.current_user.me()
         return True, "Connected to Databricks successfully"

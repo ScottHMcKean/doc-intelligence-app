@@ -33,7 +33,7 @@ These four services are brought together by a front end that is delivered with D
 
 ### Stroage Service
 
-The Storage Service is responsible for managing document storage and retrieval.. It handles file upload/download operations, provides volume path management and file operations.
+The Storage Service is responsible for managing document storage and retrieval. It is a simple class that takes care of uploads, downloads, and file checks. It also provides a hashing utility for dealing with automated file names. 
 
 ### Database Service
 
@@ -41,20 +41,17 @@ The Database Service is responsible for managing the PostgreSQL database for the
 
 ### Document Service
 
-The Document Service is responsible for orchestrating the document processing workflows. It manages document metadata and status tracking, and handles document chunking and processing state.
+The Document Service is responsible for orchestrating the document processing workflows. It asynchronously parses the uploaded documents so they can be vectorized and uploaded to the database service.
+
+To keep things simple, we use one chunk per page. This has the advantage of having a direct image per chunk and avoiding the need to chunking strategy tuning.
 
 ### Agent Service
 
 The Agent Service is responsible for combining Databricks LLM capabilities with RAG. It manages conversation state using LangGraph, provides vector search across document chunks, and handles embedding generation and similarity search.
 
-
-## TODO
-
-- [ ] Write blog
-
-
-
 ## Development
+
+This application uses uv for package management and is designed to work with Serverless v3 on Databricks. We use pytest for testing.
 
 ### 1. Setup
 
@@ -66,24 +63,24 @@ cd doc-intelligence-app
 uv sync --dev
 ```
 
-### 2. Configure
+### Configure
 
 Edit `config.yaml` with your:
 - Databricks workspace details
 - Database instance information
 - LLM and embedding endpoints
 
-### 3. Run
+### Setup and test databricks services
+
+We have designed an interactive notebook to setup and test databricks services (setup_services.ipynb). Run through it to validate that each service is ready to go with the application.
+
+### Test the application locally
 
 ```bash
 uv run streamlit run app.py
 ```
 
-## Development
-
-This application uses uv for package management and is designed to work with Serverless v3 on Databricks. We use pytest for testing.
-
-### Running Tests
+### Run Tests
 ```bash
 uv run pytest
 ```
@@ -106,10 +103,16 @@ Check that you have the correct permissions for the storage volume. Then, verify
 
 1. Fork the repository
 2. Create a feature branch
-3. Follow the modular design principles
-4. Add tests for new functionality
-5. Submit a pull request
+3. Add tests for new functionality
+4. Submit a pull request
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+# TODO
+
+- [ ] Add tests once abstractions are established
+- [ ] Make sure we save page images to volumes
+- [ ] Establish conversation history
+- [ ] Write blog

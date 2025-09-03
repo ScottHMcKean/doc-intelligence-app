@@ -11,11 +11,13 @@ This module provides LangGraph-based conversation management with:
 from .conversation_manager import ConversationManager, ChatState
 from .rag_workflow import RAGWorkflow, DocumentRAGState
 from .checkpointing import create_postgres_checkpointer
+from .service import AgentService
 
 __all__ = [
     "ConversationManager",
-    "ChatState", 
+    "ChatState",
     "RAGWorkflow",
     "DocumentRAGState",
     "create_postgres_checkpointer",
+    "AgentService",
 ]

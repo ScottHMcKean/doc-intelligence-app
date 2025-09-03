@@ -2,11 +2,19 @@
 # This file is mean to contain all configuration settings except sensitive values
 
 application:
-  name: "Document Intelligence"
+  name: Databricks Document Intelligence
   debug_mode: false
-  log_level: "INFO"
-  secrets_scope: "doc-intel"
+  log_level: INFO
+  secrets_scope: shm
   databricks_host: "https://adb-984752964297111.11.azuredatabricks.net/"
+
+storage:
+  catalog: shm
+  schema: doc_intel
+  bronze_vol_name: raw_pdfs
+  silver_vol_name: processed_pdfs
+  max_file_size_mb: 30
+  allowed_extensions: [".pdf", ".txt", ".docx", ".md"]
 
 agent:
   llm:
@@ -35,11 +43,6 @@ database:
   pool_timeout: 30
   sslmode: "prefer" # Options: disable, allow, prefer, require
   connect_timeout: 10
-
-storage:
-  volume_path: "/Volumes/shm/default/raw_pdfs"
-  max_file_size_mb: 30
-  allowed_extensions: [".pdf", ".txt", ".docx", ".md"]
 
 document:
   default_cluster_key: "default_cluster"

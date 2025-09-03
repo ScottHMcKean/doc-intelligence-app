@@ -7,12 +7,10 @@ from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 from datetime import datetime
 
-from .services import (
-    StorageService,
-    DocumentService,
-    DatabaseService,
-    AgentService,
-)
+from .database.service import DatabaseService
+from .storage.service import StorageService
+from .document.service import DocumentService
+from .agent.service import AgentService
 from .utils import (
     get_workspace_client,
     get_current_user,
@@ -52,11 +50,11 @@ class DocumentIntelligenceApp:
         )
 
         self.storage_service = StorageService(
-            client=self.databricks_client, config=self.config.get("storage", {})
+            client=self.databricks_client, config=self.config
         )
 
         self.document_service = DocumentService(
-            client=self.databricks_client, config=self.config.get("document", {})
+            client=self.databricks_client, config=self.config
         )
 
         self.agent_service = AgentService(
@@ -196,9 +194,16 @@ class DocumentIntelligenceApp:
             }
 
         try:
+            # Generate document hash
+            doc_hash = self.storage_service.generate_file_hash(file_content, user_id)
+
             # Stage 1: Upload document
-            upload_success, doc_hash, upload_path, upload_message = (
-                self.storage_service.upload_document(file_content, filename, username)
+            upload_success, upload_path, upload_message = (
+                self.storage_service.upload_file(
+                    file_content=file_content,
+                    file_name=filename,
+                    volume_name="documents",
+                )
             )
 
             if not upload_success:
