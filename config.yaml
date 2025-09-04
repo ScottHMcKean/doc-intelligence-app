@@ -34,10 +34,9 @@ agent:
 
 database:
   instance_name: "shm"
-  host: "instance-f2715363-23e1-4f98-9d15-2b83f17e6d39.database.azuredatabricks.net"
+  capacity: "CU_2"
   port: 5432
   database: "databricks_postgres"
-  user: "scott.mckean@databricks.com"
   pool_size: 5
   max_overflow: 10
   pool_timeout: 30
@@ -46,6 +45,7 @@ database:
 
 document:
   default_cluster_key: "default_cluster"
+  local_notebook_path: "doc_intel/document/ai_parse.py"
   processing_notebook_path: "/Workspace/Users/scott.mckean@databricks.com/Repos/doc-intelligence-app/ai_parse_with_db.ipynb"
   timeout_minutes: 30
   max_retries: 3

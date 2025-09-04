@@ -22,7 +22,6 @@ class ChatState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     user_id: str
     conversation_id: str
-    thread_id: str
     document_ids: List[str]
     context_documents: List[Dict[str, Any]]
     last_retrieval: Optional[str]
@@ -317,7 +316,7 @@ class AgentService:
                             SELECT dc.id, dc.content, dc.chunk_metadata, dc.token_count,
                                    d.filename, d.doc_metadata, d.doc_hash,
                                    dc.embedding <-> %s as distance
-                            FROM document_chunks dc
+                            FROM chunks dc
                             JOIN documents d ON dc.document_id = d.id
                             WHERE d.doc_hash = ANY(%s)
                             ORDER BY distance
@@ -329,7 +328,7 @@ class AgentService:
                             SELECT dc.id, dc.content, dc.chunk_metadata, dc.token_count,
                                    d.filename, d.doc_metadata, d.doc_hash,
                                    dc.embedding <-> %s as distance
-                            FROM document_chunks dc
+                            FROM chunks dc
                             JOIN documents d ON dc.document_id = d.id
                             ORDER BY distance
                             LIMIT %s
@@ -401,7 +400,7 @@ class AgentService:
 
                         # Insert chunk with embedding
                         cur.execute(
-                            """INSERT INTO document_chunks 
+                            """INSERT INTO chunks 
                                (id, document_id, chunk_index, content, embedding, 
                                 chunk_metadata, token_count, created_at) 
                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
@@ -473,7 +472,6 @@ class AgentService:
                 messages=langchain_messages,
                 user_id=user_id,
                 conversation_id=conversation_id,
-                thread_id=conversation_id,
                 document_ids=[],
                 context_documents=context_documents or [],
                 last_retrieval=None,
@@ -481,7 +479,7 @@ class AgentService:
             )
 
             # Run the graph
-            config_dict = {"configurable": {"thread_id": conversation_id}}
+            config_dict = {"configurable": {"conversation_id": conversation_id}}
             result = self.conversation_graph.invoke(initial_state, config=config_dict)
 
             # Extract response

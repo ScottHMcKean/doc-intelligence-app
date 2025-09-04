@@ -1,25 +1,21 @@
 """Database module for conversation history and document management."""
 
-from .schema import (
+from .service import DatabaseService
+from .models import (
     User,
-    Conversation,
     Document,
     DocumentChunk,
+    Conversation,
     Message,
-    create_tables,
-    Base,
-    DatabaseManager,
+    SQLTranslator,
 )
-from .service import DatabaseService
 
 __all__ = [
+    "DatabaseService",
     "User",
-    "Conversation",
     "Document",
     "DocumentChunk",
+    "Conversation",
     "Message",
-    "create_tables",
-    "Base",
-    "DatabaseManager",
-    "DatabaseService",
+    "SQLTranslator",
 ]

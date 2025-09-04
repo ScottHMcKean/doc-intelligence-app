@@ -1,0 +1,13 @@
+bundle:
+  name: doc_intelligence
+
+include:
+  - resources/*.yml
+
+workspace:
+  host: https://adb-984752964297111.11.azuredatabricks.net/
+
+targets:
+  dev:
+    default: true
+    mode: development

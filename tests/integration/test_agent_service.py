@@ -282,10 +282,10 @@ class TestAgentService:
         assert "conversation_state" in capabilities
         assert "vector_search" in capabilities
 
-    def test_document_chunks_addition_to_vectorstore(
-        self, test_config, mock_databricks_client, test_document_chunks
+    def test_chunks_addition_to_vectorstore(
+        self, test_config, mock_databricks_client, test_chunks
     ):
-        """Test adding document chunks to vector store."""
+        """Test adding chunks to vector store."""
         agent_service = AgentService(client=mock_databricks_client, config=test_config)
 
         # Mock database connection
@@ -303,7 +303,7 @@ class TestAgentService:
 
             # Test adding chunks to vector store
             success = agent_service.add_document_chunks_to_vectorstore(
-                document_id="test-doc-id", chunks=test_document_chunks
+                document_id="test-doc-id", chunks=test_chunks
             )
 
             assert success is True
@@ -332,7 +332,7 @@ class TestAgentService:
                     "token_count": 10,
                     "filename": "test.txt",
                     "doc_metadata": {},
-                    "doc_hash": "test-hash",
+                    "document_id": "test-id",
                     "distance": 0.1,
                 }.get(key)
             )

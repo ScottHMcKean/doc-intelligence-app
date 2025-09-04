@@ -131,15 +131,8 @@ def main():
         st.session_state.chat_messages = []
         st.session_state.app_initialized = True
 
-    # Verify user authentication
-    if "user_authenticated" not in st.session_state:
-        st.session_state.user_authenticated = app.verify_user_authentication()
-
-    if not st.session_state.user_authenticated:
-        st.error(
-            "❌ Authentication failed. Please check your Databricks connection and try again."
-        )
-        st.stop()
+    # User authentication is handled automatically by Databricks
+    st.session_state.user_authenticated = True
 
     # Render sidebar
     render_sidebar(app)

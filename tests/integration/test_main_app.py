@@ -67,16 +67,8 @@ class TestDocumentIntelligenceApp:
             current_user = test_app_with_mock_client.get_current_user()
             assert current_user == (username, user_id)
 
-            # Test user verification (this will fail without real database, but we can test the flow)
-            # In a real integration test, you'd have a test database
-            try:
-                is_authenticated = (
-                    test_app_with_mock_client.verify_user_authentication()
-                )
-                # This might fail without real database, which is expected
-            except Exception as e:
-                # Expected to fail without real database connection
-                assert "database" in str(e).lower() or "connection" in str(e).lower()
+            # User authentication is handled automatically by Databricks
+            # No additional verification needed
 
     def test_document_upload_flow(
         self,
@@ -98,13 +90,12 @@ class TestDocumentIntelligenceApp:
             # Check result structure
             assert "success" in result
             assert "document_id" in result
-            assert "doc_hash" in result
             assert "filename" in result
 
             # The upload should succeed (even if processing fails)
             assert result["success"] is True
             assert result["filename"] == sample_document_filename
-            assert result["doc_hash"] is not None
+            assert result["document_id"] is not None
 
     def test_conversation_management(self, test_app_with_mock_client):
         """Test conversation creation and management."""
@@ -122,7 +113,6 @@ class TestDocumentIntelligenceApp:
             assert "success" in conv_result
             if conv_result["success"]:
                 assert "conversation_id" in conv_result
-                assert "thread_id" in conv_result
                 assert "title" in conv_result
                 assert conv_result["title"] == "Test Conversation"
             else:
@@ -214,7 +204,7 @@ class TestDocumentIntelligenceApp:
                 return_value={"id": 12345, "username": "test@databricks.com"}
             )
             test_app_with_mock_client.database_service.create_document = Mock(
-                return_value={"id": str(uuid.uuid4()), "doc_hash": "test_hash"}
+                return_value={"id": str(uuid.uuid4())}
             )
 
             # Test document processing
@@ -284,23 +274,21 @@ class TestDocumentIntelligenceApp:
     def test_document_status_tracking(self, test_app_with_mock_client):
         """Test document status tracking."""
         # Mock database service
-        test_app_with_mock_client.database_service.get_document_by_hash = Mock(
+        test_app_with_mock_client.database_service.get_document_by_id = Mock(
             return_value={
                 "id": str(uuid.uuid4()),
-                "doc_hash": "test_hash",
                 "filename": "test.txt",
                 "status": "processed",
                 "created_at": "2024-01-01T00:00:00Z",
-                "updated_at": "2024-01-01T00:00:00Z",
-                "doc_metadata": {},
+                "metadata": {"filename": "test.txt", "status": "processed"},
             }
         )
 
         # Test getting document status
-        status = test_app_with_mock_client.get_document_status("test_hash")
+        status = test_app_with_mock_client.get_document_status("test_id")
 
         assert status["success"] is True
-        assert status["doc_hash"] == "test_hash"
+        assert status["document_id"] == "test_id"
         assert status["filename"] == "test.txt"
         assert status["status"] == "processed"
 

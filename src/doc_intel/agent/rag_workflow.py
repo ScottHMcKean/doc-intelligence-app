@@ -14,7 +14,7 @@ import hashlib
 from pathlib import Path
 
 # Config will be passed as parameter to functions that need it
-from ..database.schema import DatabaseManager
+from ..database.service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class RAGWorkflow:
         self.chunk_overlap = chunk_overlap
 
         # Initialize components
-        self.db_manager = DatabaseManager(postgres_connection_string)
+        self.db_service = None  # Will be set by the calling code
         self._init_embeddings()
         self._init_vectorstore()
         self._init_text_splitter()
@@ -101,7 +101,7 @@ class RAGWorkflow:
                 self.vectorstore = PGVector(
                     embeddings=self.embeddings,  # First positional parameter
                     connection=self.postgres_connection,
-                    collection_name="document_chunks",
+                    collection_name="chunks",
                     pre_delete_collection=False,
                 )
                 logger.info("Successfully initialized vector store")
@@ -216,7 +216,7 @@ class RAGWorkflow:
                 )
 
             # Store in database
-            self.db_manager.store_document_chunks(document_id, chunk_data)
+            self.db_service.store_document_chunks(document_id, chunk_data)
 
             # Also store in vector store if available
             if self.vectorstore:
@@ -241,7 +241,7 @@ class RAGWorkflow:
     ):
         """Update document processing status."""
         try:
-            with self.db_manager.get_session() as session:
+            with self.db_service.get_session() as session:
                 from ..database.schema import Document
 
                 document = (
@@ -317,7 +317,7 @@ class RAGWorkflow:
     def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
         """Get all chunks for a specific document."""
         try:
-            chunks = self.db_manager.vector_search(
+            chunks = self.db_service.vector_search(
                 query_embedding=[0] * 768,  # Dummy embedding
                 document_ids=[document_id],
                 limit=1000,  # Get all chunks
@@ -336,31 +336,3 @@ class RAGWorkflow:
         except Exception as e:
             logger.error(f"Error getting document chunks: {e}")
             return []
-
-    def delete_document_chunks(self, document_id: str) -> bool:
-        """Delete all chunks for a document."""
-        try:
-            with self.db_manager.get_session() as session:
-                from ..database.schema import DocumentChunk
-
-                # Delete from database
-                deleted_count = (
-                    session.query(DocumentChunk)
-                    .filter(DocumentChunk.document_id == document_id)
-                    .delete()
-                )
-
-                session.commit()
-
-                # Also delete from vector store if available
-                if self.vectorstore:
-                    self.vectorstore.delete(filter={"document_id": document_id})
-
-                logger.info(
-                    f"Deleted {deleted_count} chunks for document {document_id}"
-                )
-                return True
-
-        except Exception as e:
-            logger.error(f"Error deleting document chunks: {e}")
-            return False

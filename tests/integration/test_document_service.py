@@ -46,7 +46,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is True
@@ -61,7 +61,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is True
@@ -82,7 +82,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is True
@@ -98,7 +98,7 @@ class TestDocumentService:
         success, run_id, message = doc_service._queue_existing_job(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is True
@@ -114,7 +114,7 @@ class TestDocumentService:
         success, run_id, message = doc_service._queue_existing_job(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is False
@@ -196,7 +196,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
             notebook_path="/Workspace/test/notebook",
         )
 
@@ -218,7 +218,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
             job_cluster_key="custom_cluster",
         )
 
@@ -242,7 +242,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is False
@@ -264,7 +264,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is False
@@ -284,7 +284,7 @@ class TestDocumentService:
         success, run_id, message = doc_service._queue_existing_job(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is False
@@ -344,7 +344,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is True
@@ -365,7 +365,7 @@ class TestDocumentService:
         success, run_id, message = doc_service.queue_document_processing(
             input_path="/path/to/input",
             output_path="/path/to/output",
-            doc_hash="test_hash",
+            doc_hash="test-id",
         )
 
         assert success is True

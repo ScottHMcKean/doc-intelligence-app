@@ -120,7 +120,7 @@ The `conftest.py` file provides several useful fixtures:
 - `sample_document_filename`: Sample document filename
 - `test_user_info`: Test user information
 - `test_vector_embedding`: Sample vector embedding
-- `test_document_chunks`: Sample document chunks
+- `test_chunks`: Sample chunks
 - `test_conversation_messages`: Sample conversation messages
 
 ### Utility Fixtures
@@ -199,14 +199,14 @@ def test_document_upload_success(self, test_config, mock_databricks_client, samp
     """Test successful document upload."""
     storage_service = StorageService(client=mock_databricks_client, config=test_config)
     
-    success, doc_hash, upload_path, message = storage_service.upload_document(
+    success, document_id, upload_path, message = storage_service.upload_document(
         file_content=sample_document_content,
         filename="test.txt",
         username="test@databricks.com"
     )
     
     assert success is True
-    assert isinstance(doc_hash, str)
+    assert isinstance(document_id, str)
     assert upload_path.startswith("/Volumes/")
     assert "successfully" in message.lower()
 ```

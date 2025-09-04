@@ -72,14 +72,13 @@ class DocumentIntelligenceApp:
         databricks_valid, databricks_msg = validate_databricks_connection(
             self.databricks_client
         )
-        db_valid, db_msg = self.database_service.test_connection()
+
+        # Validate database connection
+        db_valid, db_msg = self.database_service.connection_live
 
         return {
             "services": {
-                "database": {
-                    "available": db_valid,
-                    "message": db_msg,
-                },
+                "database": {"available": self.database_service.connection_live},
                 "agent": {
                     "available": self.agent_service.is_available,
                     "rag_available": self.agent_service.rag_available,
@@ -128,37 +127,6 @@ class DocumentIntelligenceApp:
         """Get current authenticated user."""
         return get_current_user(self.databricks_client)
 
-    def verify_user_authentication(self) -> bool:
-        """Verify that the current user is authenticated and exists in the database."""
-        try:
-            username, user_id = self.get_current_user()
-
-            # Check if user exists in database
-            user_exists = self.database_service.user_exists(username)
-
-            if not user_exists:
-                # Create user if they don't exist
-                user = self.database_service.create_user(username, user_id)
-                if not user:
-                    logger.error(f"Failed to create user {username}")
-                    return False
-
-            # Verify authentication
-            is_authenticated = self.database_service.verify_user_authentication(
-                username, user_id
-            )
-
-            if is_authenticated:
-                logger.info(f"User {username} authenticated successfully")
-                return True
-            else:
-                logger.error(f"User {username} authentication failed")
-                return False
-
-        except Exception as e:
-            logger.error(f"Authentication verification failed: {str(e)}")
-            return False
-
     # Document Operations
 
     def upload_and_process_document(
@@ -194,9 +162,6 @@ class DocumentIntelligenceApp:
             }
 
         try:
-            # Generate document hash
-            doc_hash = self.storage_service.generate_file_hash(file_content, user_id)
-
             # Stage 1: Upload document
             upload_success, upload_path, upload_message = (
                 self.storage_service.upload_file(
@@ -211,10 +176,8 @@ class DocumentIntelligenceApp:
 
             # Stage 2: Create document record
             document = self.database_service.create_document(
-                user_id=user_id,
-                doc_hash=doc_hash,
-                filename=filename,
-                status="uploaded",
+                raw_path=upload_path,
+                metadata={"filename": filename, "status": "uploaded"},
             )
 
             if not document:
@@ -222,7 +185,6 @@ class DocumentIntelligenceApp:
                     "success": False,
                     "error": "Failed to create document record",
                     "stage": "document_creation",
-                    "doc_hash": doc_hash,
                 }
 
             # Stage 3: Queue processing job (if upload successful)
@@ -233,7 +195,7 @@ class DocumentIntelligenceApp:
                     self.document_service.queue_document_processing(
                         input_path=upload_path,
                         output_path=str(output_path),
-                        doc_hash=doc_hash,
+                        doc_hash=str(document.id),  # Use document ID instead of hash
                     )
                 )
 
@@ -255,7 +217,6 @@ class DocumentIntelligenceApp:
             return {
                 "success": True,
                 "document_id": str(document.id),
-                "doc_hash": doc_hash,
                 "filename": filename,
                 "upload_success": upload_success,
                 "upload_message": upload_message,
@@ -284,34 +245,37 @@ class DocumentIntelligenceApp:
             return upload_result
 
         # Wait for processing to complete
-        doc_hash = upload_result["doc_hash"]
+        document_id = upload_result["document_id"]
         run_id = upload_result.get("run_id")
 
         # Poll for completion
         final_result = self.poll_document_processing(
-            doc_hash=doc_hash, run_id=run_id, timeout_seconds=300
+            document_id=document_id, run_id=run_id, timeout_seconds=300
         )
 
         return final_result
 
-    def get_document_status(self, doc_hash: str) -> Dict[str, Any]:
+    def get_document_status(self, document_id: str) -> Dict[str, Any]:
         """Get document processing status."""
-        document = self.database_service.get_document_by_hash(doc_hash)
+        document = self.database_service.get_document_by_id(document_id)
         if not document:
             return {"success": False, "error": "Document not found"}
 
         return {
             "success": True,
-            "doc_hash": doc_hash,
-            "filename": document.filename,
-            "status": document.status,
-            "created_at": document.created_at.isoformat(),
-            "updated_at": document.updated_at.isoformat(),
-            "metadata": document.doc_metadata,
+            "document_id": document_id,
+            "filename": document.get("metadata", {}).get("filename", "Unknown"),
+            "status": document.get("metadata", {}).get("status", "Unknown"),
+            "created_at": (
+                document["created_at"].isoformat()
+                if document.get("created_at")
+                else "Unknown"
+            ),
+            "metadata": document.get("metadata", {}),
         }
 
     def poll_document_processing(
-        self, doc_hash: str, run_id: Optional[int] = None, timeout_seconds: int = 300
+        self, document_id: str, run_id: Optional[int] = None, timeout_seconds: int = 300
     ) -> Dict[str, Any]:
         """
         Poll for AI parsing completion by checking the database for processed results.
@@ -320,26 +284,28 @@ class DocumentIntelligenceApp:
         Returns:
             Dict with polling results
         """
-        logger.info(f"Polling for AI parsing completion: {doc_hash}")
+        logger.info(f"Polling for AI parsing completion: {document_id}")
 
         # Get document
-        document = self.database_service.get_document_by_hash(doc_hash)
+        document = self.database_service.get_document_by_id(document_id)
         if not document:
             return {
                 "success": False,
                 "error": "Document not found",
-                "doc_hash": doc_hash,
+                "document_id": document_id,
             }
 
         # Extract file path and user ID for polling
-        file_path = document.get("original_path") or document.get("filename")
+        file_path = document.get("raw_path") or document.get("metadata", {}).get(
+            "filename"
+        )
         user_id = document.get("user_id")
 
         if not file_path or not user_id:
             return {
                 "success": False,
                 "error": "Document missing file path or user ID",
-                "doc_hash": doc_hash,
+                "document_id": document_id,
             }
 
         logger.info(f"Polling database for file: {file_path}, user: {user_id}")
@@ -353,7 +319,7 @@ class DocumentIntelligenceApp:
             )
 
             if completion_result and completion_result.get("completed"):
-                logger.info(f"AI parsing completed for document {doc_hash}")
+                logger.info(f"AI parsing completed for document {document_id}")
 
                 # Update document status to processed
                 self.database_service.update_document_status(
@@ -362,7 +328,7 @@ class DocumentIntelligenceApp:
 
                 return {
                     "success": True,
-                    "doc_hash": doc_hash,
+                    "document_id": document_id,
                     "message": "AI parsing completed successfully",
                     "results": completion_result,
                     "total_chunks": completion_result.get("total_chunks", 0),
@@ -377,7 +343,7 @@ class DocumentIntelligenceApp:
                 logger.info(f"Still polling... {int(elapsed)}s elapsed")
 
         # Timeout reached
-        logger.warning(f"AI parsing polling timeout for document {doc_hash}")
+        logger.warning(f"AI parsing polling timeout for document {document_id}")
         self.database_service.update_document_status(
             str(document["id"]), "failed", "AI parsing timeout"
         )
@@ -385,7 +351,7 @@ class DocumentIntelligenceApp:
         return {
             "success": False,
             "error": "AI parsing timeout - no results found in database",
-            "doc_hash": doc_hash,
+            "document_id": document_id,
         }
 
     def get_user_documents(self) -> List[Dict[str, Any]]:
@@ -393,44 +359,62 @@ class DocumentIntelligenceApp:
 
         username, user_id = self.get_current_user()
 
-        user = self.database_service.create_user(username, user_id)
+        user = self.database_service.create_user()
         if not user:
             return []
 
-        documents = self.database_service.get_user_documents(user_id)
+        documents = self.database_service.get_user_documents()
 
         doc_list = []
         for doc in documents:
             doc_list.append(
                 {
-                    "doc_hash": doc.doc_hash,
-                    "filename": doc.filename,
-                    "status": doc.status,
+                    "document_id": doc.id,
+                    "filename": (
+                        doc.metadata.get("filename", "Unknown")
+                        if doc.metadata
+                        else "Unknown"
+                    ),
+                    "status": (
+                        doc.metadata.get("status", "Unknown")
+                        if doc.metadata
+                        else "Unknown"
+                    ),
                     "created_at": doc.created_at.isoformat(),
-                    "updated_at": doc.updated_at.isoformat(),
-                    "file_size": doc.file_size,
-                    "content_type": doc.content_type,
-                    "metadata": doc.doc_metadata,
+                    "raw_path": doc.raw_path,
+                    "processed_path": doc.processed_path,
+                    "metadata": doc.metadata,
                 }
             )
 
         return doc_list
 
-    def get_document_info(self, doc_hash: str) -> Optional[Dict[str, Any]]:
+    def get_document_info(self, document_id: str) -> Optional[Dict[str, Any]]:
         """Get information about a specific document."""
-        document = self.database_service.get_document_by_hash(doc_hash)
+        document = self.database_service.get_document_by_id(document_id)
         if not document:
             return None
 
         return {
-            "doc_hash": doc_hash,
-            "filename": document.filename,
-            "status": document.status,
-            "created_at": document.created_at.isoformat(),
-            "updated_at": document.updated_at.isoformat(),
-            "file_size": document.file_size,
-            "content_type": document.content_type,
-            "metadata": document.doc_metadata,
+            "document_id": document_id,
+            "filename": (
+                document.get("metadata", {}).get("filename", "Unknown")
+                if document.get("metadata")
+                else "Unknown"
+            ),
+            "status": (
+                document.get("metadata", {}).get("status", "Unknown")
+                if document.get("metadata")
+                else "Unknown"
+            ),
+            "created_at": (
+                document["created_at"].isoformat()
+                if document.get("created_at")
+                else "Unknown"
+            ),
+            "raw_path": document.get("raw_path"),
+            "processed_path": document.get("processed_path"),
+            "metadata": document.get("metadata", {}),
         }
 
     # Conversation Operations
@@ -482,10 +466,15 @@ class DocumentIntelligenceApp:
                 if document_hashes:
                     # Get document info for title
                     docs = []
-                    for doc_hash in document_hashes:
-                        doc = self.database_service.get_document_by_hash(doc_hash)
+                    for document_id in document_hashes:
+                        doc = self.database_service.get_document_by_id(document_id)
                         if doc:
-                            docs.append(doc.filename)
+                            filename = (
+                                doc.get("metadata", {}).get("filename", "Unknown")
+                                if doc.get("metadata")
+                                else "Unknown"
+                            )
+                            docs.append(filename)
 
                     if docs:
                         title = f"Chat with {', '.join(docs[:2])}"
@@ -498,10 +487,9 @@ class DocumentIntelligenceApp:
 
             # Create conversation
             conversation = self.database_service.create_conversation(
-                user_id=user_id,
-                title=title,
-                thread_id=thread_id,
-                document_ids=document_hashes or [],
+                conversation_id=thread_id,
+                doc_ids=document_hashes or [],
+                metadata={"title": title} if title else None,
             )
 
             if not conversation:
@@ -514,7 +502,6 @@ class DocumentIntelligenceApp:
             return {
                 "success": True,
                 "conversation_id": str(conversation.id),
-                "thread_id": thread_id,
                 "title": title,
                 "document_hashes": document_hashes or [],
                 "created_at": conversation.created_at.isoformat(),
@@ -738,9 +725,11 @@ class DocumentIntelligenceApp:
         if not document_hashes:
             username, user_id = self.get_current_user()
             user_docs = self.database_service.get_user_documents_by_username(username)
-            # Extract document hashes from user documents
+            # Extract document IDs from user documents
             document_hashes = [
-                doc["doc_hash"] for doc in user_docs if doc["status"] == "processed"
+                doc["document_id"]
+                for doc in user_docs
+                if doc.get("status") == "processed"
             ]
 
         search_success, results, message = self.agent_service.search_documents(
@@ -874,7 +863,9 @@ class DocumentIntelligenceApp:
                     username
                 )
                 processed_docs = [
-                    doc["doc_hash"] for doc in user_docs if doc["status"] == "processed"
+                    doc["document_id"]
+                    for doc in user_docs
+                    if doc.get("status") == "processed"
                 ]
                 document_hashes = processed_docs
 

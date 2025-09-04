@@ -18,7 +18,7 @@ from langgraph.graph import StateGraph, add_messages
 from langgraph.prebuilt import ToolNode
 
 # Config will be passed as parameter to functions that need it
-from ..database.schema import DatabaseManager
+from ..database.service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,6 @@ class ChatState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     user_id: str
     conversation_id: str
-    thread_id: str
     document_ids: List[str]
     context_documents: List[Dict[str, Any]]
     last_retrieval: Optional[str]
@@ -58,6 +57,7 @@ class ConversationManager:
         databricks_token: Optional[str] = None,
         embedding_endpoint: str = "databricks-bge-large-en",
         chat_endpoint: str = "databricks-dbrx-instruct",
+        db_service: DatabaseService = None,
     ):
         self.postgres_connection = postgres_connection_string
         self.databricks_host = databricks_host
@@ -65,8 +65,8 @@ class ConversationManager:
         self.embedding_endpoint = embedding_endpoint
         self.chat_endpoint = chat_endpoint
 
-        # Initialize database manager
-        self.db_manager = DatabaseManager(postgres_connection_string)
+        # Initialize database service
+        self.db_service = db_service
 
         # Initialize components
         self._init_embeddings()
@@ -109,7 +109,7 @@ class ConversationManager:
                 self.vectorstore = PGVector(
                     embeddings=self.embeddings,  # First positional parameter
                     connection=self.postgres_connection,
-                    collection_name="document_chunks",
+                    collection_name="chunks",
                     pre_delete_collection=False,
                 )
                 logger.info("Successfully initialized PGVector store")
@@ -335,7 +335,7 @@ class ConversationManager:
             if state["messages"]:
                 last_message = state["messages"][-1]
                 if isinstance(last_message, AIMessage):
-                    self.db_manager.add_message(
+                    self.db_service.add_message(
                         conversation_id=state["conversation_id"],
                         role="assistant",
                         content=last_message.content,
@@ -355,22 +355,18 @@ class ConversationManager:
         user_id: str,
         conversation_id: Optional[str] = None,
         document_ids: Optional[List[str]] = None,
-        thread_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Send a message and get a response."""
 
-        # Generate IDs if not provided
+        # Generate ID if not provided
         if not conversation_id:
             conversation_id = str(uuid.uuid4())
-        if not thread_id:
-            thread_id = f"thread_{conversation_id}"
 
         # Create initial state
         initial_state = ChatState(
             messages=[HumanMessage(content=user_message)],
             user_id=user_id,
             conversation_id=conversation_id,
-            thread_id=thread_id,
             document_ids=document_ids or [],
             context_documents=[],
             last_retrieval=None,
@@ -379,7 +375,7 @@ class ConversationManager:
 
         # Save user message to database
         try:
-            self.db_manager.add_message(
+            self.db_service.add_message(
                 conversation_id=conversation_id,
                 role="user",
                 content=user_message,
@@ -390,7 +386,7 @@ class ConversationManager:
 
         # Process through graph
         try:
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {"configurable": {"conversation_id": conversation_id}}
             result = await self.graph.ainvoke(initial_state, config=config)
 
             # Extract AI response
@@ -403,7 +399,6 @@ class ConversationManager:
             return {
                 "response": ai_response,
                 "conversation_id": conversation_id,
-                "thread_id": thread_id,
                 "context_used": len(result.get("context_documents", [])),
                 "success": True,
             }
@@ -413,7 +408,6 @@ class ConversationManager:
             return {
                 "response": "I apologize, but I encountered an error processing your message. Please try again.",
                 "conversation_id": conversation_id,
-                "thread_id": thread_id,
                 "context_used": 0,
                 "success": False,
                 "error": str(e),
@@ -425,20 +419,17 @@ class ConversationManager:
         """Create a new conversation."""
         try:
             conversation_id = str(uuid.uuid4())
-            thread_id = f"thread_{conversation_id}"
 
-            conversation = self.db_manager.create_conversation(
-                user_id=user_id,
-                title=title,
-                thread_id=thread_id,
-                document_ids=document_ids,
+            conversation = self.db_service.create_conversation(
+                conversation_id=conversation_id,
+                doc_ids=document_ids,
+                metadata={"title": title},
             )
 
             return {
                 "conversation_id": str(conversation.id),
-                "thread_id": conversation.thread_id,
-                "title": conversation.title,
-                "document_ids": conversation.document_ids,
+                "title": title,
+                "document_ids": conversation.doc_ids,
                 "created_at": conversation.created_at.isoformat(),
             }
 
@@ -449,7 +440,7 @@ class ConversationManager:
     def get_conversation_history(self, conversation_id: str) -> List[Dict[str, Any]]:
         """Get conversation message history."""
         try:
-            messages = self.db_manager.get_conversation_messages(conversation_id)
+            messages = self.db_service.get_conversation_messages(conversation_id)
             return [
                 {
                     "role": msg.role,

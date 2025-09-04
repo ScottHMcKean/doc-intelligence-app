@@ -79,8 +79,10 @@ def mock_databricks_client():
     client = Mock(spec=WorkspaceClient)
 
     # Mock user info
+    mock_email = Mock()
+    mock_email.value = "test@databricks.com"
     client.current_user.me.return_value = Mock(
-        user_name="test@databricks.com", id=12345
+        user_name="test@databricks.com", id=12345, emails=[mock_email]
     )
 
     # Mock database operations
@@ -203,7 +205,7 @@ def test_vector_embedding() -> list[float]:
 
 
 @pytest.fixture
-def test_document_chunks() -> list[dict[str, Any]]:
+def test_chunks() -> list[dict[str, Any]]:
     """Sample document chunks for testing."""
     return [
         {

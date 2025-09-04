@@ -3,18 +3,9 @@
 import pytest
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import psycopg2
 import psycopg2.extras
-
-
-def create_mock_cursor():
-    """Create a properly configured mock cursor with context manager support."""
-    mock_cursor = MagicMock()
-    mock_cursor.__enter__ = Mock(return_value=mock_cursor)
-    mock_cursor.__exit__ = Mock(return_value=None)
-    return mock_cursor
-
 
 import sys
 from pathlib import Path
@@ -24,6 +15,21 @@ src_path = Path(__file__).parent.parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
 from doc_intel.database.service import DatabaseService
+from doc_intel.database.models import (
+    User,
+    Document,
+    DocumentChunk,
+    Conversation,
+    Message,
+)
+
+
+def create_mock_cursor():
+    """Create a properly configured mock cursor with context manager support."""
+    mock_cursor = Mock()
+    mock_cursor.__enter__ = Mock(return_value=mock_cursor)
+    mock_cursor.__exit__ = Mock(return_value=None)
+    return mock_cursor
 
 
 class TestDatabaseService:
@@ -36,25 +42,8 @@ class TestDatabaseService:
         assert db_service.client is not None
         assert db_service.config is not None
 
-    def test_connection_context_manager(self, test_config, mock_databricks_client):
-        """Test database connection context manager."""
-        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
-
-        # Test connection context manager
-        with db_service.get_connection() as conn:
-            # Connection should be available (mocked)
-            assert conn is not None
-
-    def test_connection_without_client(self, test_config):
-        """Test connection handling when client is not available."""
-        db_service = DatabaseService(client=None, config=test_config)
-
-        with db_service.get_connection() as conn:
-            # Should return None when no client
-            assert conn is None
-
-    def test_connection_test(self, test_config, mock_databricks_client):
-        """Test database connection testing."""
+    def test_connection_live_property(self, test_config, mock_databricks_client):
+        """Test database connection live property."""
         db_service = DatabaseService(client=mock_databricks_client, config=test_config)
 
         # Mock the connection and cursor
@@ -63,42 +52,58 @@ class TestDatabaseService:
         mock_cursor.fetchone.return_value = (1,)
         mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
-            success, message = db_service.test_connection()
+            is_live = db_service.connection_live
 
-            assert success is True
-            assert "successful" in message.lower()
+            assert is_live is True
 
-    def test_connection_test_failure(self, test_config, mock_databricks_client):
-        """Test database connection testing failure."""
+    def test_connection_live_failure(self, test_config, mock_databricks_client):
+        """Test database connection live property failure."""
         db_service = DatabaseService(client=mock_databricks_client, config=test_config)
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = None
+        # Mock connection to raise exception
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.side_effect = Exception("Connection failed")
 
-            success, message = db_service.test_connection()
+            is_live = db_service.connection_live
 
-            assert success is False
-            assert "not available" in message.lower()
+            assert is_live is False
 
-    def test_table_creation(self, test_config, mock_databricks_client):
-        """Test database table creation."""
+    def test_connect_to_pg(self, test_config, mock_databricks_client):
+        """Test direct PostgreSQL connection."""
+        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
+
+        # Mock psycopg2.connect
+        mock_conn = Mock()
+        with patch("psycopg2.connect") as mock_connect:
+            mock_connect.return_value = mock_conn
+
+            result = db_service.connect_to_pg()
+
+            assert result == mock_conn
+            mock_connect.assert_called_once()
+
+    def test_run_pg_query(self, test_config, mock_databricks_client):
+        """Test running PostgreSQL queries."""
         db_service = DatabaseService(client=mock_databricks_client, config=test_config)
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_cursor = create_mock_cursor()
+        mock_cursor.fetchall.return_value = [(1,)]
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
-            result = db_service.create_tables()
+            result = db_service.run_pg_query("SELECT 1")
 
-            # Should succeed with mocked connection
-            assert result is True
+            assert result == [(1,)]
+            mock_cursor.execute.assert_called_once_with("SELECT 1")
+            mock_conn.commit.assert_called_once()
+            mock_conn.close.assert_called_once()
 
     def test_user_operations(self, test_config, mock_databricks_client):
         """Test user creation and management operations."""
@@ -106,23 +111,29 @@ class TestDatabaseService:
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_cursor.fetchone.return_value = None  # User doesn't exist
+        mock_cursor = create_mock_cursor()
         mock_cursor.fetchone.side_effect = [
-            None,
-            {"id": 12345, "username": "test@databricks.com"},
-        ]  # First call returns None, second returns user
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+            None,  # First call (check by ID) returns None
+            None,  # Second call (check by username) returns None
+            {
+                "id": "12345",
+                "username": "test@databricks.com",
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            },  # Third call (INSERT RETURNING)
+        ]
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
-            # Test user creation
-            user = db_service.create_user("test@databricks.com", 12345)
+            # Test user creation (no parameters needed - uses cached user)
+            user = db_service.create_user()
 
             assert user is not None
-            assert user["id"] == 12345
-            assert user["username"] == "test@databricks.com"
+            assert isinstance(user, User)
+            assert user.id == "12345"
+            assert user.username == "test@databricks.com"
 
     def test_user_exists_check(self, test_config, mock_databricks_client):
         """Test user existence checking."""
@@ -130,39 +141,16 @@ class TestDatabaseService:
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
+        mock_cursor = create_mock_cursor()
         mock_cursor.fetchone.return_value = (1,)  # User exists
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
-            # Test user existence
-            exists = db_service.user_exists("test@databricks.com")
+            exists = db_service.user_exists()
 
             assert exists is True
-
-    def test_user_authentication_verification(
-        self, test_config, mock_databricks_client
-    ):
-        """Test user authentication verification."""
-        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
-
-        # Mock the connection and cursor
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_cursor.fetchone.return_value = (1,)  # User authenticated
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
-
-            # Test authentication verification
-            is_authenticated = db_service.verify_user_authentication(
-                "test@databricks.com", 12345
-            )
-
-            assert is_authenticated is True
 
     def test_document_operations(self, test_config, mock_databricks_client):
         """Test document creation and management operations."""
@@ -170,75 +158,55 @@ class TestDatabaseService:
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_document = {
+        mock_cursor = create_mock_cursor()
+        mock_cursor.fetchone.return_value = {
             "id": str(uuid.uuid4()),
-            "doc_hash": "test_hash",
-            "filename": "test.txt",
-            "status": "uploaded",
-            "user_id": 12345,
+            "user_id": "12345",
+            "raw_path": "/test/path",
+            "processed_path": "/processed/path",
+            "metadata": {"test": "data"},
             "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
         }
-        mock_cursor.fetchone.return_value = mock_document
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
             # Test document creation
             document = db_service.create_document(
-                user_id=12345, doc_hash="test_hash", filename="test.txt"
+                raw_path="/test/path",
+                processed_path="/processed/path",
+                metadata={"test": "data"},
             )
 
             assert document is not None
-            assert document["doc_hash"] == "test_hash"
-            assert document["filename"] == "test.txt"
+            assert isinstance(document, Document)
+            assert document.id is not None
 
-    def test_document_status_update(self, test_config, mock_databricks_client):
-        """Test document status updates."""
+    def test_document_retrieval_by_id(self, test_config, mock_databricks_client):
+        """Test document retrieval by ID."""
         db_service = DatabaseService(client=mock_databricks_client, config=test_config)
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_cursor.rowcount = 1  # One row updated
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
-
-            # Test status update
-            success = db_service.update_document_status(
-                document_id=str(uuid.uuid4()), status="processed"
-            )
-
-            assert success is True
-
-    def test_document_retrieval_by_hash(self, test_config, mock_databricks_client):
-        """Test document retrieval by hash."""
-        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
-
-        # Mock the connection and cursor
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_document = {
+        mock_cursor = create_mock_cursor()
+        mock_cursor.fetchone.return_value = {
             "id": str(uuid.uuid4()),
-            "doc_hash": "test_hash",
-            "filename": "test.txt",
-            "status": "processed",
+            "user_id": "12345",
+            "raw_path": "/test/path",
+            "processed_path": "/processed/path",
+            "metadata": {"test": "data"},
+            "created_at": datetime.now(timezone.utc),
         }
-        mock_cursor.fetchone.return_value = mock_document
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
-            # Test document retrieval
-            document = db_service.get_document_by_hash("test_hash")
+            document = db_service.get_document_by_id("test_id")
 
             assert document is not None
-            assert document["doc_hash"] == "test_hash"
+            assert document["id"] is not None
 
     def test_user_documents_retrieval(self, test_config, mock_databricks_client):
         """Test retrieving documents for a user."""
@@ -246,22 +214,34 @@ class TestDatabaseService:
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_documents = [
-            {"id": str(uuid.uuid4()), "filename": "doc1.txt", "status": "processed"},
-            {"id": str(uuid.uuid4()), "filename": "doc2.txt", "status": "uploaded"},
+        mock_cursor = create_mock_cursor()
+        mock_cursor.fetchall.return_value = [
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": "12345",
+                "raw_path": "/test/path1",
+                "processed_path": "/processed/path1",
+                "metadata": {"test": "data1"},
+                "created_at": datetime.now(timezone.utc),
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": "12345",
+                "raw_path": "/test/path2",
+                "processed_path": "/processed/path2",
+                "metadata": {"test": "data2"},
+                "created_at": datetime.now(timezone.utc),
+            },
         ]
-        mock_cursor.fetchall.return_value = mock_documents
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
-            # Test user documents retrieval
-            documents = db_service.get_user_documents(12345)
+            documents = db_service.get_user_documents()
 
             assert len(documents) == 2
-            assert documents[0]["filename"] == "doc1.txt"
+            assert all(isinstance(doc, Document) for doc in documents)
 
     def test_conversation_operations(self, test_config, mock_databricks_client):
         """Test conversation creation and management."""
@@ -269,27 +249,30 @@ class TestDatabaseService:
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_conversation = {
-            "id": str(uuid.uuid4()),
-            "user_id": 12345,
-            "title": "Test Conversation",
-            "thread_id": str(uuid.uuid4()),
-            "status": "active",
+        mock_cursor = create_mock_cursor()
+        mock_cursor.fetchone.return_value = {
+            "id": "test-session-123",
+            "user_id": "12345",
+            "doc_ids": ["doc1", "doc2"],
+            "metadata": {"title": "Test Conversation", "test": "data"},
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
         }
-        mock_cursor.fetchone.return_value = mock_conversation
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
             # Test conversation creation
             conversation = db_service.create_conversation(
-                user_id=12345, title="Test Conversation", thread_id=str(uuid.uuid4())
+                conversation_id="test-session-123",
+                doc_ids=["doc1", "doc2"],
+                metadata={"title": "Test Conversation", "test": "data"},
             )
 
             assert conversation is not None
-            assert conversation["title"] == "Test Conversation"
+            assert isinstance(conversation, Conversation)
+            assert conversation.id == "test-session-123"
 
     def test_message_operations(self, test_config, mock_databricks_client):
         """Test message creation and retrieval."""
@@ -297,148 +280,72 @@ class TestDatabaseService:
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_message = {
+        mock_cursor = create_mock_cursor()
+        mock_cursor.fetchone.return_value = {
             "id": str(uuid.uuid4()),
-            "conversation_id": str(uuid.uuid4()),
+            "conv_id": str(uuid.uuid4()),
             "role": "user",
-            "content": "Hello, world!",
+            "content": {"type": "text", "content": "Hello"},
+            "metadata": {"test": "data"},
             "created_at": datetime.now(timezone.utc),
         }
-        mock_cursor.fetchone.return_value = mock_message
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
             # Test message creation
             message = db_service.add_message(
-                conversation_id=str(uuid.uuid4()), role="user", content="Hello, world!"
+                conv_id=str(uuid.uuid4()),
+                role="user",
+                content={"type": "text", "content": "Hello"},
+                metadata={"test": "data"},
             )
 
             assert message is not None
-            assert message["role"] == "user"
-            assert message["content"] == "Hello, world!"
+            assert isinstance(message, Message)
+            assert message.role == "user"
 
-    def test_document_chunks_operations(
-        self, test_config, mock_databricks_client, test_document_chunks
-    ):
-        """Test document chunk storage and retrieval."""
+    def test_chunks_operations(self, test_config, mock_databricks_client, test_chunks):
+        """Test chunk storage and retrieval."""
         db_service = DatabaseService(client=mock_databricks_client, config=test_config)
 
         # Mock the connection and cursor
         mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_chunk = {
-            "id": str(uuid.uuid4()),
-            "document_id": str(uuid.uuid4()),
-            "chunk_index": 0,
-            "content": "Test chunk content",
-        }
-        mock_cursor.fetchone.return_value = mock_chunk
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_cursor = create_mock_cursor()
+        mock_cursor.fetchall.return_value = [
+            {
+                "id": str(uuid.uuid4()),
+                "doc_id": str(uuid.uuid4()),
+                "content": "Test chunk content",
+                "embedding": [0.1] * 768,
+                "metadata": {"chunk_index": 0},
+                "created_at": datetime.now(timezone.utc),
+            }
+        ]
+        mock_conn.cursor.return_value = mock_cursor
 
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
 
             # Test chunk storage
-            chunks = db_service.store_document_chunks(
-                document_id=str(uuid.uuid4()), chunks=test_document_chunks
+            result = db_service.store_document_chunks(
+                document_id=str(uuid.uuid4()),
+                chunks=test_chunks,
             )
 
-            assert len(chunks) == len(test_document_chunks)
+            assert result is True
+
+            # Test chunk retrieval
+            chunks = db_service.get_document_chunks(str(uuid.uuid4()))
+
+            assert len(chunks) == 1
             assert chunks[0]["content"] == "Test chunk content"
-
-    def test_vector_search(
-        self, test_config, mock_databricks_client, test_vector_embedding
-    ):
-        """Test vector similarity search."""
-        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
-
-        # Mock the connection and cursor
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_result = {
-            "id": str(uuid.uuid4()),
-            "content": "Relevant content",
-            "distance": 0.1,
-            "filename": "test.txt",
-        }
-        mock_cursor.fetchall.return_value = [mock_result]
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
-
-            # Test vector search
-            results = db_service.vector_search(
-                query_embedding=test_vector_embedding, limit=5
-            )
-
-            assert len(results) == 1
-            assert results[0]["content"] == "Relevant content"
-
-    def test_conversation_document_association(
-        self, test_config, mock_databricks_client
-    ):
-        """Test adding documents to conversations."""
-        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
-
-        # Mock the connection and cursor
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_cursor.fetchone.return_value = (["doc1", "doc2"],)  # Current document IDs
-        mock_cursor.rowcount = 1  # One row updated
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
-
-            # Test adding documents to conversation
-            success = db_service.add_documents_to_conversation(
-                conversation_id=str(uuid.uuid4()), document_hashes=["doc3", "doc4"]
-            )
-
-            assert success is True
-
-    def test_ai_parsing_completion_check(self, test_config, mock_databricks_client):
-        """Test AI parsing completion checking."""
-        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
-
-        # Mock the connection and cursor
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_chunks = [
-            {"id": str(uuid.uuid4()), "content": "Chunk 1", "chunk_index": 0},
-            {"id": str(uuid.uuid4()), "content": "Chunk 2", "chunk_index": 1},
-        ]
-        mock_document = {"id": str(uuid.uuid4()), "filename": "test.txt"}
-        mock_cursor.fetchall.return_value = mock_chunks
-        mock_cursor.fetchone.side_effect = [mock_document]  # For document query
-
-        with patch.object(db_service, "get_connection") as mock_get_conn:
-            mock_get_conn.return_value.__enter__.return_value = mock_conn
-
-            # Test AI parsing completion check
-            result = db_service.check_ai_parsing_completion(
-                file_path="/path/to/test.txt", user_id=12345
-            )
-
-            assert result is not None
-            assert result["completed"] is True
-            assert result["total_chunks"] == 2
 
     def test_error_handling_without_client(self, test_config):
         """Test error handling when client is not available."""
-        db_service = DatabaseService(client=None, config=test_config)
-
-        # All operations should return None or empty results
-        assert db_service.create_user("test", 123) is None
-        assert db_service.user_exists("test") is False
-        assert db_service.create_document(123, "hash", "file.txt") is None
-        assert db_service.get_user_documents(123) == []
-        assert db_service.create_conversation(123, "title", "thread") is None
-        assert db_service.add_message("conv", "user", "content") is None
+        with pytest.raises(Exception):
+            DatabaseService(client=None, config=test_config)
 
     def test_database_connection_string_generation(
         self, test_config, mock_databricks_client
@@ -446,8 +353,42 @@ class TestDatabaseService:
         """Test database connection string generation."""
         db_service = DatabaseService(client=mock_databricks_client, config=test_config)
 
-        # The connection string generation is handled internally
-        # We can test that the service can be initialized with the config
-        assert db_service.config.get("database.instance_name") == "test-instance"
-        assert db_service.config.get("database.database") == "test_db"
-        assert db_service.config.get("database.user") == "test_user"
+        # Test that connection parameters are properly set
+        assert db_service._connection_params is not None
+        assert "host" in db_service._connection_params
+        assert "dbname" in db_service._connection_params
+        assert "user" in db_service._connection_params
+        assert "password" in db_service._connection_params
+        assert "sslmode" in db_service._connection_params
+
+    def test_setup_database_instance(self, test_config, mock_databricks_client):
+        """Test database instance setup."""
+        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
+
+        # Mock the connection and cursor for extension creation
+        mock_conn = Mock()
+        mock_cursor = create_mock_cursor()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
+
+            result = db_service.setup_database_instance()
+
+            assert result is True
+
+    def test_create_tables(self, test_config, mock_databricks_client):
+        """Test table creation."""
+        db_service = DatabaseService(client=mock_databricks_client, config=test_config)
+
+        # Mock the connection and cursor
+        mock_conn = Mock()
+        mock_cursor = create_mock_cursor()
+        mock_conn.cursor.return_value = mock_cursor
+
+        with patch.object(db_service, "connect_to_pg") as mock_connect:
+            mock_connect.return_value = mock_conn
+
+            result = db_service.create_tables()
+
+            assert result is True
