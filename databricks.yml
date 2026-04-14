@@ -1,8 +1,12 @@
 bundle:
   name: doc_intelligence
+  git:
+    origin_url: "https://github.com/your-org/doc-intelligence-app.git"
 
 include:
   - resources/*.yml
+  - src/**/*.py
+  - src/**/*.ipynb
 
 workspace:
   host: https://adb-984752964297111.11.azuredatabricks.net/
@@ -11,3 +15,184 @@ targets:
   dev:
     default: true
     mode: development
+    variables:
+      environment: "dev"
+      database_instance_name: "doc-intel-dev"
+      database_capacity: "2"
+    workspace:
+      root_path: "/Workspace/Shared/doc_intelligence/dev"
+    resources:
+      jobs:
+        database_setup:
+          name: "Database Setup - Dev"
+          tasks:
+            - task_key: "setup_database"
+              job_cluster_key: "serverless_cluster"
+              python_wheel_task:
+                package_name: "doc_intelligence_app"
+                entry_point: "database_setup"
+                parameters: ["--environment", "dev"]
+          job_clusters:
+            - job_cluster_key: "serverless_cluster"
+              new_cluster:
+                spark_version: "13.3.x-scala2.12"
+                node_type_id: "i3.xlarge"
+                num_workers: 0
+                spark_conf:
+                  spark.databricks.cluster.profile: "serverless"
+                data_security_mode: "SINGLE_USER"
+                runtime_engine: "PHOTON"
+          timeout_seconds: 1800
+          max_concurrent_runs: 1
+
+        document_processing:
+          name: "Document Processing - Dev"
+          tasks:
+            - task_key: "process_document"
+              job_cluster_key: "serverless_cluster"
+              python_wheel_task:
+                package_name: "doc_intelligence_app"
+                entry_point: "document_processing"
+                parameters:
+                  [
+                    "--environment",
+                    "dev",
+                    "--input_path",
+                    "{{job.input_path}}",
+                    "--output_path",
+                    "{{job.output_path}}",
+                    "--doc_hash",
+                    "{{job.doc_hash}}",
+                  ]
+          job_clusters:
+            - job_cluster_key: "serverless_cluster"
+              new_cluster:
+                spark_version: "13.3.x-scala2.12"
+                node_type_id: "i3.xlarge"
+                num_workers: 0
+                spark_conf:
+                  spark.databricks.cluster.profile: "serverless"
+                data_security_mode: "SINGLE_USER"
+                runtime_engine: "PHOTON"
+          timeout_seconds: 3600
+          max_concurrent_runs: 3
+
+        agent_workflow:
+          name: "Agent Workflow - Dev"
+          tasks:
+            - task_key: "run_agent"
+              job_cluster_key: "serverless_cluster"
+              python_wheel_task:
+                package_name: "doc_intelligence_app"
+                entry_point: "agent_workflow"
+                parameters:
+                  [
+                    "--environment",
+                    "dev",
+                    "--conversation_id",
+                    "{{job.conversation_id}}",
+                  ]
+          job_clusters:
+            - job_cluster_key: "serverless_cluster"
+              new_cluster:
+                spark_version: "13.3.x-scala2.12"
+                node_type_id: "i3.xlarge"
+                num_workers: 0
+                spark_conf:
+                  spark.databricks.cluster.profile: "serverless"
+                data_security_mode: "SINGLE_USER"
+                runtime_engine: "PHOTON"
+          timeout_seconds: 1800
+          max_concurrent_runs: 5
+
+  prod:
+    mode: production
+    variables:
+      environment: "prod"
+      database_instance_name: "doc-intel-prod"
+      database_capacity: "4"
+    workspace:
+      root_path: "/Workspace/Shared/doc_intelligence/prod"
+    resources:
+      jobs:
+        database_setup:
+          name: "Database Setup - Prod"
+          tasks:
+            - task_key: "setup_database"
+              job_cluster_key: "serverless_cluster"
+              python_wheel_task:
+                package_name: "doc_intelligence_app"
+                entry_point: "database_setup"
+                parameters: ["--environment", "prod"]
+          job_clusters:
+            - job_cluster_key: "serverless_cluster"
+              new_cluster:
+                spark_version: "13.3.x-scala2.12"
+                node_type_id: "i3.xlarge"
+                num_workers: 0
+                spark_conf:
+                  spark.databricks.cluster.profile: "serverless"
+                data_security_mode: "SINGLE_USER"
+                runtime_engine: "PHOTON"
+          timeout_seconds: 1800
+          max_concurrent_runs: 1
+
+        document_processing:
+          name: "Document Processing - Prod"
+          tasks:
+            - task_key: "process_document"
+              job_cluster_key: "serverless_cluster"
+              python_wheel_task:
+                package_name: "doc_intelligence_app"
+                entry_point: "document_processing"
+                parameters:
+                  [
+                    "--environment",
+                    "prod",
+                    "--input_path",
+                    "{{job.input_path}}",
+                    "--output_path",
+                    "{{job.output_path}}",
+                    "--doc_hash",
+                    "{{job.doc_hash}}",
+                  ]
+          job_clusters:
+            - job_cluster_key: "serverless_cluster"
+              new_cluster:
+                spark_version: "13.3.x-scala2.12"
+                node_type_id: "i3.xlarge"
+                num_workers: 0
+                spark_conf:
+                  spark.databricks.cluster.profile: "serverless"
+                data_security_mode: "SINGLE_USER"
+                runtime_engine: "PHOTON"
+          timeout_seconds: 3600
+          max_concurrent_runs: 5
+
+        agent_workflow:
+          name: "Agent Workflow - Prod"
+          tasks:
+            - task_key: "run_agent"
+              job_cluster_key: "serverless_cluster"
+              python_wheel_task:
+                package_name: "doc_intelligence_app"
+                entry_point: "agent_workflow"
+                parameters:
+                  [
+                    "--environment",
+                    "prod",
+                    "--conversation_id",
+                    "{{job.conversation_id}}",
+                  ]
+          job_clusters:
+            - job_cluster_key: "serverless_cluster"
+              new_cluster:
+                spark_version: "13.3.x-scala2.12"
+                node_type_id: "i3.xlarge"
+                num_workers: 0
+                spark_conf:
+                  spark.databricks.cluster.profile: "serverless"
+                data_security_mode: "SINGLE_USER"
+                runtime_engine: "PHOTON"
+          timeout_seconds: 1800
+          max_concurrent_runs: 10

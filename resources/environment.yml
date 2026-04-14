@@ -1,0 +1,32 @@
+# Environment configuration for Databricks Asset Bundle
+# This file defines environment-specific variables and settings
+
+environments:
+  dev:
+    variables:
+      environment: "dev"
+      database_instance_name: "doc-intel-dev"
+      database_capacity: "2"
+      storage_path: "/tmp/doc_intelligence/dev"
+      max_concurrent_runs: 3
+      timeout_minutes: 30
+
+  prod:
+    variables:
+      environment: "prod"
+      database_instance_name: "doc-intel-prod"
+      database_capacity: "4"
+      storage_path: "/tmp/doc_intelligence/prod"
+      max_concurrent_runs: 10
+      timeout_minutes: 60
+
+
+
+
+
+
+
+
+
+
+

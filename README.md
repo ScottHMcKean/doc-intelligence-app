@@ -51,7 +51,7 @@ The Agent Service is responsible for combining Databricks LLM capabilities with 
 
 ## Development
 
-This application uses uv for package management and is designed to work with Serverless v3 on Databricks. We use pytest for testing.
+This application uses uv for package management and is designed to work with Serverless v3 on Databricks. We use pytest for testing and Databricks Asset Bundle (DAB) for job management and deployment.
 
 ### 1. Setup
 
@@ -70,6 +70,39 @@ Edit `config.yaml` with your:
 - Database instance information
 - LLM and embedding endpoints
 
+### Databricks Asset Bundle (DAB) Setup
+
+This repository now includes comprehensive DAB support for:
+- **Job Management**: Automated creation and deployment of Databricks jobs
+- **Serverless Environments**: Optimized serverless compute configurations
+- **Service Integration**: Seamless integration between Database and Document services
+- **Environment Management**: Separate dev and prod configurations
+
+#### Quick Start with DAB
+
+1. **Validate Bundle**:
+   ```bash
+   python scripts/deploy.py --action validate
+   ```
+
+2. **Deploy to Development**:
+   ```bash
+   python scripts/deploy.py --action deploy --target dev
+   ```
+
+3. **Run Database Setup**:
+   ```bash
+   python scripts/deploy.py --action run-job --job-name database_setup --target dev
+   ```
+
+4. **Process a Document**:
+   ```bash
+   python scripts/deploy.py --action run-job --job-name document_processing --target dev \
+     --parameters input_path=/path/to/doc.pdf output_path=/path/to/processed doc_hash=abc123
+   ```
+
+For detailed DAB documentation, see [DAB_README.md](DAB_README.md).
+
 ### Setup and test databricks services
 
 We have designed an interactive notebook to setup and test databricks services (setup_services.ipynb). Run through it to validate that each service is ready to go with the application.
@@ -83,6 +116,9 @@ uv run streamlit run app.py
 ### Run Tests
 ```bash
 uv run pytest
+
+# Test DAB integration
+uv run python scripts/test_integration.py
 ```
 
 ### Troubleshooting FAQ
